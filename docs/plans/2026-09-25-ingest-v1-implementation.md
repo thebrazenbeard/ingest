@@ -65,7 +65,7 @@
 - [x] Record the complete portfolio screening and exact admitted donor heads.
 - [x] Document security caveats and provider-neutral extension rules.
 - [x] Build/install into an isolated target with no runtime dependencies and run the complete `unittest` suite. (A pristine venv could not fetch its build backend because this execution environment blocks outbound DNS; the same local setuptools backend built the wheel successfully with `--no-build-isolation`.)
-- [ ] Initialize/populate GitHub `main`, read back critical files, and verify the exact resulting head.
+- [x] Initialize/populate GitHub `main`, read back critical files, and verify the exact resulting head.
 
 ## Externally visible decisions
 
