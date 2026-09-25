@@ -1,6 +1,8 @@
 import hashlib
+import math
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -106,6 +108,44 @@ class StorageDurabilityTests(unittest.TestCase):
 
             with self.assertRaises(StoreConflict):
                 store.put_record("record-1", value)
+
+    def test_cleanup_stale_temp_files_reclaims_only_old_owned_temps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            store = RecordingStore(root)
+            records = root / "records"
+            records.mkdir()
+            old_temp = records / ".tmp-old"
+            recent_temp = records / ".tmp-recent"
+            unrelated = records / "keep.txt"
+            old_temp.write_bytes(b"old")
+            recent_temp.write_bytes(b"recent")
+            unrelated.write_bytes(b"keep")
+            now = time.time()
+            os.utime(old_temp, (now - 7200, now - 7200))
+            os.utime(recent_temp, (now, now))
+            store.synced_directories.clear()
+
+            result = store.cleanup_stale_temp_files(older_than_seconds=3600)
+
+            self.assertEqual(
+                result,
+                {"files_removed": 1, "bytes_removed": 3},
+            )
+            self.assertFalse(old_temp.exists())
+            self.assertTrue(recent_temp.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertEqual(store.synced_directories, [records])
+
+    def test_cleanup_stale_temp_files_rejects_invalid_age_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            for value in (-1.0, math.nan, math.inf):
+                with self.subTest(value=value):
+                    with self.assertRaises(ValueError):
+                        store.cleanup_stale_temp_files(
+                            older_than_seconds=value,
+                        )
 
     @unittest.skipIf(os.name == "nt", "directory fsync is not portable on Windows")
     def test_posix_directory_sync_succeeds_on_real_directory(self):

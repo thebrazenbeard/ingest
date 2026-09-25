@@ -24,7 +24,7 @@ Ingest does not decide whether a claim is true, current, canonical, authoritativ
 
 ## Storage model
 
-The default `FileSystemStore` is content-addressed:
+The default `FileSystemStore` is content-addressed. Interrupted writes can leave `.tmp-*` remnants; cleanup is explicit rather than automatic through `cleanup_stale_temp_files()`, which defaults to a 24-hour finite/non-negative age guard and reports reclaimed file/byte counts:
 
 ```text
 .ingest/

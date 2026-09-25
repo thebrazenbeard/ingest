@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
+import time
 from typing import Any
 
 from .canonical import canonical_json, sha256_bytes
@@ -113,6 +115,57 @@ class FileSystemStore:
         finally:
             if os.path.exists(temp_name):
                 os.unlink(temp_name)
+
+    def cleanup_stale_temp_files(
+        self,
+        *,
+        older_than_seconds: float = 86400.0,
+    ) -> dict[str, int]:
+        if not math.isfinite(older_than_seconds) or older_than_seconds < 0:
+            raise ValueError(
+                "older_than_seconds must be finite and non-negative"
+            )
+
+        cutoff = time.time() - older_than_seconds
+        files_removed = 0
+        bytes_removed = 0
+
+        for dirpath, dirnames, filenames in os.walk(
+            self.root,
+            topdown=True,
+            followlinks=False,
+        ):
+            directory = Path(dirpath)
+            dirnames[:] = [
+                name
+                for name in dirnames
+                if not self._is_link_like(directory / name)
+            ]
+
+            for name in filenames:
+                if not name.startswith(".tmp-"):
+                    continue
+                path = directory / name
+                if self._is_link_like(path):
+                    continue
+                try:
+                    info = path.lstat()
+                except FileNotFoundError:
+                    continue
+                if info.st_mtime > cutoff:
+                    continue
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    continue
+                files_removed += 1
+                bytes_removed += info.st_size
+                self._fsync_directory(path.parent)
+
+        return {
+            "files_removed": files_removed,
+            "bytes_removed": bytes_removed,
+        }
 
     def put_blob(self, data: bytes, *, media_type: str, kind: str) -> tuple[Artifact, bool]:
         digest = sha256_bytes(data)

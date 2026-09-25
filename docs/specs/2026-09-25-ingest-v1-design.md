@@ -200,6 +200,7 @@ Concurrent same-identity ingestion is first-writer-wins only after verifying det
 - `Ingestor.ingest_many(sources, policy=None) -> list[IngestResult]`
 - adapter contract: `supports(source)` + `acquire(source, policy) -> Acquisition`
 - `FileSystemStore` artifact/record/receipt/derivation operations
+- `FileSystemStore.cleanup_stale_temp_files(older_than_seconds=86400.0) -> {files_removed, bytes_removed}` for explicit bounded cleanup of interrupted-write residue
 
 ## CLI contract
 
