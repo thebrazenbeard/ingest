@@ -36,7 +36,7 @@ The default `FileSystemStore` is content-addressed:
 
 Raw and normalized artifacts are immutable. Artifact identity is SHA-256 of exact persisted bytes. Ingest identity is a canonical digest over stable source identity, raw SHA-256, parser-driving media type, normalizer version, and policy identity.
 
-This means identical bytes from different sources share a content artifact while retaining distinct ingest/provenance identities. Concurrent first ingestion of the same identity is arbitrated by deterministic record semantics: one record wins, equivalent contenders resolve against it, and contradictory immutable content raises a store conflict instead of being accepted as a duplicate. For accepted ingests, the final `record/READY` receipt is bound into the immutable record; durable record presence is the acceptance commit point.
+This means identical bytes from different sources share a content artifact while retaining distinct ingest/provenance identities. Local-file acquisition binds bytes to an opened descriptor and rejects ordinary identity/size/timestamp changes across validation and read. Concurrent first ingestion of the same identity is arbitrated by deterministic record semantics: one record wins, equivalent contenders resolve against it, and contradictory immutable content raises a store conflict instead of being accepted as a duplicate. For accepted ingests, the final `record/READY` receipt is bound into the immutable record; durable record presence is the acceptance commit point. On POSIX, new immutable publications also attempt to `fsync` the containing directory after the hard-link commit.
 
 ## Status model
 

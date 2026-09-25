@@ -19,6 +19,23 @@ class FileSystemStore:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _fsync_directory(path: Path) -> bool:
+        if os.name == "nt":
+            return False
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        try:
+            fd = os.open(path, flags)
+        except OSError:
+            return False
+        try:
+            os.fsync(fd)
+        except OSError:
+            return False
+        finally:
+            os.close(fd)
+        return True
+
     def _atomic_create(self, path: Path, data: bytes) -> bool:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
@@ -37,6 +54,7 @@ class FileSystemStore:
                 if path.read_bytes() != data:
                     raise StoreConflict(f"immutable path collision: {path}")
                 return False
+            self._fsync_directory(path.parent)
             return True
         finally:
             if os.path.exists(temp_name):
