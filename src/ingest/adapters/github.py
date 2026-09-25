@@ -5,6 +5,7 @@ import hashlib
 import json
 import mimetypes
 from typing import Protocol, runtime_checkable
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -28,8 +29,20 @@ class GitHubApiTransport:
         headers = {"Accept": "application/vnd.github+json", "User-Agent": "vera-ingest/0.1"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
-        with urlopen(Request(url, headers=headers), timeout=15) as response:
-            return json.loads(response.read().decode("utf-8"))
+        try:
+            with urlopen(Request(url, headers=headers), timeout=15) as response:
+                raw = response.read()
+        except HTTPError as exc:
+            raise AcquisitionFailed(f"GitHub API returned HTTP {exc.code}") from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise AcquisitionFailed("GitHub API request failed") from exc
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise AcquisitionFailed("GitHub API returned invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise AcquisitionFailed("GitHub API returned a non-object payload")
+        return payload
 
     def resolve_ref(self, owner: str, repository: str, ref: str) -> str:
         payload = self._json(f"{self.api_base}/repos/{quote(owner)}/{quote(repository)}/commits/{quote(ref, safe='')}")
@@ -88,9 +101,13 @@ class GitHubAdapter:
             source.owner, source.repository, commit, source.path, policy.max_bytes
         )
         if media_type is None:
-            media_type, _ = mimetypes.guess_type(source.path)
-            if source.path.lower().endswith(".jsonl"):
+            lower_path = source.path.lower()
+            if lower_path.endswith(".json"):
+                media_type = "application/json"
+            elif lower_path.endswith((".jsonl", ".ndjson")):
                 media_type = "application/x-ndjson"
+            else:
+                media_type, _ = mimetypes.guess_type(source.path)
         locator = f"github://{source.owner}/{source.repository}@{commit}/{source.path}"
         return Acquisition(
             data=data,

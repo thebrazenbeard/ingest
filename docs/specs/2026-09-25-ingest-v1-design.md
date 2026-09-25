@@ -157,7 +157,7 @@ No derivative is created in V1 unless a registered future parser explicitly owns
 
 `QUARANTINED` means raw bytes were safely stored but structured interpretation is unsafe or invalid, such as a file claiming JSON that does not parse as JSON.
 
-`FAILED` means acquisition or internal execution could not establish a reliable admitted result.
+`FAILED` means acquisition or internal execution could not establish a reliable admitted result. Default GitHub API network, HTTP, and invalid-JSON transport failures are normalized into this governed failure path rather than escaping as raw transport exceptions.
 
 `PARTIAL` is reserved for future optional derivations where the raw/core record remains safe but nonessential processing is incomplete.
 
@@ -165,7 +165,7 @@ A repeated observation does not promote the disposition of the existing record: 
 
 ## GitHub provenance
 
-A requested branch or tag is a mutable acquisition hint. The GitHub adapter resolves it to an exact commit before reading file content, and `SourceRef.source_identity` binds owner, repository, exact commit, and path. The default API transport recomputes the returned file's Git object digest and rejects a reported blob identity that does not match the acquired bytes. The originally requested ref remains claimed metadata. When the transport does not supply a media type, the repository path provides the same extension-based structured-type hint used for local files (`.json`, `.jsonl`, and other standard mimetypes), so invalid structured files do not silently degrade into plain text solely because they came from GitHub.
+A requested branch or tag is a mutable acquisition hint. The GitHub adapter resolves it to an exact commit before reading file content, and `SourceRef.source_identity` binds owner, repository, exact commit, and path. The default API transport recomputes the returned file's Git object digest and rejects a reported blob identity that does not match the acquired bytes. The originally requested ref remains claimed metadata. When the transport does not supply a media type, `.json`, `.jsonl`, and `.ndjson` are assigned deterministic parser-driving media types before any host MIME lookup; other extensions may still use the platform MIME database as a best-effort descriptive hint. Invalid structured files therefore do not silently degrade into plain text because a host MIME table disagrees.
 
 Credential material belongs to the transport object, not the source record, receipt, locator, or artifact.
 
@@ -191,7 +191,7 @@ The default HTTP(S) transport binds each connection to an address that passed th
 
 V1 ships a filesystem content-addressed store. Provider databases, object stores, Supabase, vector indexes, Bus projection, and Vera-specific integrations remain downstream adapters. Core importability cannot depend on them.
 
-Concurrent same-identity ingestion is first-writer-wins only after verifying identity-defining fields. Equivalent races resolve to the already-created record/derivation; a true immutable-content conflict still raises `StoreConflict`.
+Concurrent same-identity ingestion is first-writer-wins only after verifying deterministic record semantics: source identity material, raw/normalized artifacts, status, evidence class, normalizer version, policy, derivation IDs, warnings, and error state must agree; non-identity source metadata, observation timestamps, and receipt IDs may differ between observations. Equivalent races resolve to the already-created record/derivation; a true immutable-content conflict still raises `StoreConflict`. For accepted intake, a `record/READY` receipt is persisted and included in the candidate record before create-only publication. The record's durable presence commits `ACCEPTED`, eliminating the former post-record final-receipt gap.
 
 ## Public Python interfaces
 
@@ -204,7 +204,7 @@ Concurrent same-identity ingestion is first-writer-wins only after verifying ide
 
 Commands: `text`, `file`, `url`, `github`, `json`, `message`, and `inspect`.
 
-Default output is compact machine-readable JSON on stdout. `--human` selects a compact human summary. CLI-side `json` and `message` file/stdin reads obey `--max-bytes` before parsing, and malformed/non-object message input is returned as a governed machine-readable rejection. `ACCEPTED` and `DUPLICATE` exit `0`; all other ingest result states exit `2`.
+Default output is compact machine-readable JSON on stdout. `--human` selects a compact human summary. File-command `--root` values are resolved to absolute paths at the CLI boundary before `IngestPolicy` is constructed; programmatic policy callers must still provide absolute roots. CLI-side `json` and `message` file/stdin reads obey `--max-bytes` before parsing, and malformed/non-object message input is returned as a governed machine-readable rejection. `ACCEPTED` and `DUPLICATE` exit `0`; all other ingest result states exit `2`.
 
 ## V1 acceptance
 
