@@ -5,9 +5,10 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ingest import Ingestor, TextSource
-from ingest.canonical import canonical_json
+from ingest.canonical import canonical_digest, canonical_json
 from ingest.storage import FileSystemStore, StoreConflict, StoreIntegrityError
 
 
@@ -168,6 +169,27 @@ class StorageDurabilityTests(unittest.TestCase):
             with self.assertRaises(StoreIntegrityError):
                 store.get_record(result.ingest_id)
 
+    def test_artifact_size_mismatch_is_rejected_before_blob_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            artifact, _created = store.put_blob(
+                b"small",
+                media_type="application/octet-stream",
+                kind="raw",
+            )
+            blob_path = store.root / artifact.storage_locator
+            blob_path.write_bytes(b"larger-than-declared")
+
+            with patch(
+                "ingest.storage.os.read",
+                side_effect=AssertionError("blob bytes should not be read"),
+            ):
+                with self.assertRaises(StoreIntegrityError):
+                    store._verify_artifact(
+                        artifact.to_dict(),
+                        expected_kind="raw",
+                    )
+
     def test_record_read_rejects_corrupted_referenced_blob(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FileSystemStore(Path(tmp) / ".ingest")
@@ -179,6 +201,56 @@ class StorageDurabilityTests(unittest.TestCase):
 
             with self.assertRaises(StoreIntegrityError):
                 store.get_record(result.ingest_id)
+
+    def test_derivation_rejects_self_digested_but_wrong_stage_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            result = Ingestor(store).ingest(
+                TextSource("hello\r\nworld", locator="urn:derivation-stage")
+            )
+            derivation_id = result.derivation_ids[0]
+            derivation = store.get_derivation(derivation_id)
+            receipt_id = derivation["receipt_id"]
+            receipt_path = store.root / "receipts" / f"{receipt_id}.json"
+            receipt = store.get_receipt(receipt_id)
+            receipt["stage"] = "acquire"
+            body = dict(receipt)
+            body.pop("receipt_digest")
+            receipt["receipt_digest"] = canonical_digest(body)
+            receipt_path.write_bytes(
+                (canonical_json(receipt) + "\n").encode("utf-8")
+            )
+
+            with self.assertRaises(StoreIntegrityError):
+                store.get_derivation(derivation_id)
+
+    def test_record_rejects_derivation_receipt_outside_its_receipt_chain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            first = Ingestor(store).ingest(
+                TextSource("first\r\nvalue", locator="urn:derivation-first")
+            )
+            second = Ingestor(store).ingest(
+                TextSource("second\r\nvalue", locator="urn:derivation-second")
+            )
+            derivation_id = first.derivation_ids[0]
+            derivation_path = (
+                store.root / "derivations" / f"{derivation_id}.json"
+            )
+            derivation = store.get_derivation(derivation_id)
+            second_record = store.get_record(second.ingest_id)
+            second_normalize_receipt = next(
+                receipt_id
+                for receipt_id in second_record["receipt_ids"]
+                if store.get_receipt(receipt_id)["stage"] == "normalize"
+            )
+            derivation["receipt_id"] = second_normalize_receipt
+            derivation_path.write_bytes(
+                (canonical_json(derivation) + "\n").encode("utf-8")
+            )
+
+            with self.assertRaises(StoreIntegrityError):
+                store.get_record(first.ingest_id)
 
     def test_derivation_read_rejects_identity_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:

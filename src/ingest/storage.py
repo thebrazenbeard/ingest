@@ -181,7 +181,12 @@ class FileSystemStore:
             value.st_ctime_ns,
         )
 
-    def _read_managed_bytes(self, path: Path) -> bytes:
+    def _read_managed_bytes(
+        self,
+        path: Path,
+        *,
+        expected_size: int | None = None,
+    ) -> bytes:
         path = Path(path)
         self._assert_no_managed_links(path)
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
@@ -195,6 +200,13 @@ class FileSystemStore:
 
         try:
             opened = os.fstat(fd)
+            if (
+                expected_size is not None
+                and opened.st_size != expected_size
+            ):
+                raise StoreIntegrityError(
+                    "managed storage object size differs before read"
+                )
             chunks: list[bytes] = []
             while True:
                 chunk = os.read(fd, 64 * 1024)
@@ -280,7 +292,10 @@ class FileSystemStore:
         size = value.get("size_bytes")
         if not isinstance(size, int) or isinstance(size, bool) or size < 0:
             raise StoreIntegrityError("artifact size_bytes is invalid")
-        data = self._read_managed_bytes(self.root / expected_locator)
+        data = self._read_managed_bytes(
+            self.root / expected_locator,
+            expected_size=size,
+        )
         if len(data) != size:
             raise StoreIntegrityError("artifact size does not match bytes")
         if sha256_bytes(data) != digest:
@@ -360,6 +375,27 @@ class FileSystemStore:
                 "derivation receipt id is invalid"
             )
         receipt = self.get_receipt(receipt_id)
+        if (
+            receipt.get("stage") != "normalize"
+            or receipt.get("outcome") != "PASS"
+        ):
+            raise StoreIntegrityError(
+                "derivation receipt is not normalize/PASS evidence"
+            )
+        parent_artifact_id = payload.get("parent_artifact_id")
+        child_artifact_id = payload.get("child_artifact_id")
+        if receipt.get("input_artifact_ids") != [
+            parent_artifact_id
+        ]:
+            raise StoreIntegrityError(
+                "derivation receipt input does not match parent artifact"
+            )
+        if receipt.get("output_artifact_ids") != [
+            child_artifact_id
+        ]:
+            raise StoreIntegrityError(
+                "derivation receipt output does not match child artifact"
+            )
         normalizer_version = (receipt.get("details") or {}).get(
             "normalizer_version"
         )
@@ -554,6 +590,11 @@ class FileSystemStore:
             self.get_derivation(value)
             for value in derivation_ids
         ]
+        for derivation in derivations:
+            if derivation.get("receipt_id") not in receipt_ids:
+                raise StoreIntegrityError(
+                    "derivation receipt is outside record receipt chain"
+                )
         if (
             normalized_artifact is not None
             and normalized_artifact.get("artifact_id")

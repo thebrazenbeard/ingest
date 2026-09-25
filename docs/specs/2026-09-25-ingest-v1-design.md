@@ -199,7 +199,7 @@ Concurrent same-identity ingestion is first-writer-wins only after verifying det
 - `Ingestor.ingest(source, policy=None) -> IngestResult`
 - `Ingestor.ingest_many(sources, policy=None) -> list[IngestResult]`
 - adapter contract: `supports(source)` + `acquire(source, policy) -> Acquisition`
-- `FileSystemStore` artifact/record/receipt/derivation operations with fail-closed read verification
+- `FileSystemStore` artifact/record/receipt/derivation operations with fail-closed read verification, including pre-read artifact-size checks and derivation receipt-chain binding
 - `StoreIntegrityError` for corrupted or internally inconsistent persisted evidence
 - `FileSystemStore.cleanup_stale_temp_files(older_than_seconds=86400.0) -> {files_removed, bytes_removed}` for explicit bounded cleanup of interrupted-write residue
 
