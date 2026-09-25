@@ -17,7 +17,34 @@ class StoreConflict(RuntimeError):
 class FileSystemStore:
     def __init__(self, root: str | Path = ".ingest"):
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
+        self._ensure_directory_chain(self.root)
+
+    def _ensure_directory_chain(self, path: Path) -> None:
+        path = Path(path)
+        if path.exists():
+            if not path.is_dir():
+                raise NotADirectoryError(path)
+            return
+
+        missing: list[Path] = []
+        cursor = path
+        while not cursor.exists():
+            missing.append(cursor)
+            parent = cursor.parent
+            if parent == cursor:
+                break
+            cursor = parent
+
+        if cursor.exists() and not cursor.is_dir():
+            raise NotADirectoryError(cursor)
+
+        for directory in reversed(missing):
+            try:
+                directory.mkdir()
+            except FileExistsError:
+                if not directory.is_dir():
+                    raise
+            self._fsync_directory(directory.parent)
 
     @staticmethod
     def _fsync_directory(path: Path) -> bool:
@@ -37,7 +64,7 @@ class FileSystemStore:
         return True
 
     def _atomic_create(self, path: Path, data: bytes) -> bool:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_directory_chain(path.parent)
         if path.exists():
             if path.read_bytes() != data:
                 raise StoreConflict(f"immutable path collision: {path}")
