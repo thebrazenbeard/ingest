@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+import base64
+import json
+from typing import Protocol, runtime_checkable
+from urllib.parse import quote
+from urllib.request import Request, urlopen
+
+from ..model import Acquisition, GitHubFileSource, SourceRef, now_iso
+from ..policy import IngestPolicy
+from .base import AcquisitionFailed, PolicyRejected
+
+
+@runtime_checkable
+class GitHubTransport(Protocol):
+    def resolve_ref(self, owner: str, repository: str, ref: str) -> str: ...
+    def fetch_file(self, owner: str, repository: str, commit: str, path: str, max_bytes: int) -> tuple[bytes, str | None, dict]: ...
+
+
+class GitHubApiTransport:
+    def __init__(self, token: str | None = None, api_base: str = "https://api.github.com"):
+        self._token = token
+        self.api_base = api_base.rstrip("/")
+
+    def _json(self, url: str) -> dict:
+        headers = {"Accept": "application/vnd.github+json", "User-Agent": "vera-ingest/0.1"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        with urlopen(Request(url, headers=headers), timeout=15) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def resolve_ref(self, owner: str, repository: str, ref: str) -> str:
+        payload = self._json(f"{self.api_base}/repos/{quote(owner)}/{quote(repository)}/commits/{quote(ref, safe='')}")
+        sha = payload.get("sha")
+        if not isinstance(sha, str) or not sha:
+            raise AcquisitionFailed("GitHub ref did not resolve to a commit")
+        return sha
+
+    def fetch_file(self, owner: str, repository: str, commit: str, path: str, max_bytes: int):
+        payload = self._json(
+            f"{self.api_base}/repos/{quote(owner)}/{quote(repository)}/contents/{quote(path)}?ref={quote(commit)}"
+        )
+        if payload.get("type") != "file" or payload.get("encoding") != "base64":
+            raise AcquisitionFailed("GitHub source is not a base64 file payload")
+        size = payload.get("size")
+        if isinstance(size, int) and size > max_bytes:
+            raise PolicyRejected(f"GitHub file exceeds max_bytes={max_bytes}")
+        try:
+            data = base64.b64decode(payload["content"], validate=False)
+        except Exception as exc:
+            raise AcquisitionFailed("GitHub file content could not be decoded") from exc
+        if len(data) > max_bytes:
+            raise PolicyRejected(f"GitHub file exceeds max_bytes={max_bytes}")
+        return data, None, {"git_blob_sha": payload.get("sha"), "size": size}
+
+
+class GitHubAdapter:
+    name = "github"
+    version = "1"
+
+    def __init__(self, transport: GitHubTransport | None = None):
+        self.transport = transport or GitHubApiTransport()
+
+    def supports(self, source) -> bool:
+        return isinstance(source, GitHubFileSource)
+
+    def acquire(self, source: GitHubFileSource, policy: IngestPolicy) -> Acquisition:
+        if not all((source.owner, source.repository, source.ref, source.path)):
+            raise PolicyRejected("GitHub owner/repository/ref/path must be non-empty")
+        commit = self.transport.resolve_ref(source.owner, source.repository, source.ref)
+        data, media_type, observed = self.transport.fetch_file(
+            source.owner, source.repository, commit, source.path, policy.max_bytes
+        )
+        locator = f"github://{source.owner}/{source.repository}@{commit}/{source.path}"
+        return Acquisition(
+            data=data,
+            source=SourceRef(
+                scheme="github",
+                locator=locator,
+                adapter=self.name,
+                adapter_version=self.version,
+                observed_at=now_iso(),
+                source_identity={
+                    "owner": source.owner,
+                    "repository": source.repository,
+                    "commit": commit,
+                    "path": source.path,
+                },
+                claimed_metadata={"requested_ref": source.ref},
+                observed_metadata=observed,
+            ),
+            claimed_media_type=media_type,
+        )
