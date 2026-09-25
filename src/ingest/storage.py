@@ -375,6 +375,10 @@ class FileSystemStore:
                 "derivation receipt id is invalid"
             )
         receipt = self.get_receipt(receipt_id)
+        if not isinstance(receipt.get("ingest_id"), str):
+            raise StoreIntegrityError(
+                "derivation receipt lacks ingest identity"
+            )
         if (
             receipt.get("stage") != "normalize"
             or receipt.get("outcome") != "PASS"
@@ -591,9 +595,12 @@ class FileSystemStore:
             for value in derivation_ids
         ]
         for derivation in derivations:
-            if derivation.get("receipt_id") not in receipt_ids:
+            derivation_receipt = self.get_receipt(
+                derivation.get("receipt_id")
+            )
+            if derivation_receipt.get("ingest_id") != ingest_id:
                 raise StoreIntegrityError(
-                    "derivation receipt is outside record receipt chain"
+                    "derivation receipt belongs to a different ingest"
                 )
         if (
             normalized_artifact is not None

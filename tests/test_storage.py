@@ -224,7 +224,7 @@ class StorageDurabilityTests(unittest.TestCase):
             with self.assertRaises(StoreIntegrityError):
                 store.get_derivation(derivation_id)
 
-    def test_record_rejects_derivation_receipt_outside_its_receipt_chain(self):
+    def test_record_rejects_derivation_receipt_from_foreign_ingest(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FileSystemStore(Path(tmp) / ".ingest")
             first = Ingestor(store).ingest(
@@ -251,6 +251,40 @@ class StorageDurabilityTests(unittest.TestCase):
 
             with self.assertRaises(StoreIntegrityError):
                 store.get_record(first.ingest_id)
+
+    def test_record_accepts_equivalent_derivation_receipt_from_same_ingest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            result = Ingestor(store).ingest(
+                TextSource("same\r\ningest", locator="urn:same-ingest-receipt")
+            )
+            derivation_id = result.derivation_ids[0]
+            derivation_path = (
+                store.root / "derivations" / f"{derivation_id}.json"
+            )
+            derivation = store.get_derivation(derivation_id)
+            original_receipt = store.get_receipt(derivation["receipt_id"])
+            alternate_receipt = dict(original_receipt)
+            alternate_receipt["receipt_id"] = "r_same_ingest_alternate"
+            body = dict(alternate_receipt)
+            body.pop("receipt_digest")
+            alternate_receipt["receipt_digest"] = canonical_digest(body)
+            store.put_receipt(
+                alternate_receipt["receipt_id"],
+                alternate_receipt,
+            )
+            derivation["receipt_id"] = alternate_receipt["receipt_id"]
+            derivation_path.write_bytes(
+                (canonical_json(derivation) + "\n").encode("utf-8")
+            )
+
+            record = store.get_record(result.ingest_id)
+
+            self.assertEqual(record["ingest_id"], result.ingest_id)
+            self.assertNotIn(
+                alternate_receipt["receipt_id"],
+                record["receipt_ids"],
+            )
 
     def test_derivation_read_rejects_identity_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
