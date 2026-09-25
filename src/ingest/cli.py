@@ -5,7 +5,16 @@ import json
 from pathlib import Path
 import sys
 
-from .model import BytesSource, FileSource, GitHubFileSource, MessageSource, TextSource, UrlSource
+from .model import (
+    BytesSource,
+    FileSource,
+    GitHubFileSource,
+    IngestResult,
+    IngestStatus,
+    MessageSource,
+    TextSource,
+    UrlSource,
+)
 from .pipeline import Ingestor
 from .policy import IngestPolicy
 from .storage import FileSystemStore
@@ -53,10 +62,20 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _read_text(path: str) -> str:
+def _read_bytes(path: str, max_bytes: int) -> bytes:
     if path == "-":
-        return sys.stdin.read()
-    return Path(path).read_text(encoding="utf-8")
+        stream = getattr(sys.stdin, "buffer", sys.stdin)
+        value = stream.read(max_bytes + 1)
+        data = value.encode("utf-8") if isinstance(value, str) else value
+    else:
+        input_path = Path(path)
+        if input_path.stat().st_size > max_bytes:
+            raise ValueError(f"input exceeds max_bytes={max_bytes}")
+        with input_path.open("rb") as handle:
+            data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(f"input exceeds max_bytes={max_bytes}")
+    return data
 
 
 def _human_result(payload: dict) -> str:
@@ -67,6 +86,16 @@ def _human_result(payload: dict) -> str:
     digest = raw.get("sha256", "-")
     suffix = f" error={payload['error']}" if payload.get("error") else ""
     return f"{payload['status']} {ingest_id} raw={digest}{suffix}"
+
+
+def _emit_result(result: IngestResult, human: bool) -> int:
+    payload = result.to_dict()
+    print(
+        _human_result(payload)
+        if human
+        else json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    )
+    return 0 if result.status in {IngestStatus.ACCEPTED, IngestStatus.DUPLICATE} else 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -101,22 +130,40 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "github":
         source = GitHubFileSource(args.owner, args.repository, args.ref, args.path)
     elif args.command == "json":
-        text = _read_text(args.path)
+        try:
+            data = _read_bytes(args.path, args.max_bytes)
+        except ValueError as exc:
+            return _emit_result(IngestResult(None, IngestStatus.REJECTED, error=str(exc)), args.human)
+        except OSError as exc:
+            error = exc.strerror or type(exc).__name__
+            return _emit_result(IngestResult(None, IngestStatus.FAILED, error=f"input read failed: {error}"), args.human)
         locator = args.locator or ("stdin:json" if args.path == "-" else str(Path(args.path).resolve()))
-        source = BytesSource(text.encode("utf-8"), locator=locator, media_type="application/json")
+        source = BytesSource(data, locator=locator, media_type="application/json")
     elif args.command == "message":
-        payload = json.loads(_read_text(args.path))
+        try:
+            data = _read_bytes(args.path, args.max_bytes)
+        except ValueError as exc:
+            return _emit_result(IngestResult(None, IngestStatus.REJECTED, error=str(exc)), args.human)
+        except OSError as exc:
+            error = exc.strerror or type(exc).__name__
+            return _emit_result(IngestResult(None, IngestStatus.FAILED, error=f"input read failed: {error}"), args.human)
+        try:
+            payload = json.loads(data)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return _emit_result(
+                IngestResult(None, IngestStatus.REJECTED, error="message input is not valid JSON"),
+                args.human,
+            )
         if not isinstance(payload, dict):
-            parser = _parser()
-            parser.error("message JSON must be an object")
+            return _emit_result(
+                IngestResult(None, IngestStatus.REJECTED, error="message JSON must be an object"),
+                args.human,
+            )
         source = MessageSource(args.message_id, payload, source=args.source, event_time=args.event_time)
     else:  # pragma: no cover
         raise AssertionError(args.command)
 
-    result = Ingestor(store).ingest(source, policy=policy)
-    payload = result.to_dict()
-    print(_human_result(payload) if args.human else json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
-    return 0 if result.status.value in {"ACCEPTED", "DUPLICATE"} else 2
+    return _emit_result(Ingestor(store).ingest(source, policy=policy), args.human)
 
 
 if __name__ == "__main__":
