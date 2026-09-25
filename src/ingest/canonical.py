@@ -11,7 +11,7 @@ def canonical_json(value: Any) -> str:
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
-        default=str,
+        allow_nan=False,
     )
 
 

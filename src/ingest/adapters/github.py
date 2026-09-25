@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import mimetypes
 from typing import Protocol, runtime_checkable
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -71,6 +72,10 @@ class GitHubAdapter:
         data, media_type, observed = self.transport.fetch_file(
             source.owner, source.repository, commit, source.path, policy.max_bytes
         )
+        if media_type is None:
+            media_type, _ = mimetypes.guess_type(source.path)
+            if source.path.lower().endswith(".jsonl"):
+                media_type = "application/x-ndjson"
         locator = f"github://{source.owner}/{source.repository}@{commit}/{source.path}"
         return Acquisition(
             data=data,

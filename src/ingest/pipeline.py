@@ -17,7 +17,7 @@ from .model import (
 )
 from .normalization import NORMALIZER_VERSION, NormalizationError, normalize_bytes, sniff_media_type
 from .policy import IngestPolicy
-from .storage import FileSystemStore
+from .storage import FileSystemStore, StoreConflict
 
 
 class Ingestor:
@@ -56,6 +56,70 @@ class Ingestor:
         receipt = replace(body, receipt_digest=canonical_digest(body.body()))
         self.store.put_receipt(receipt.receipt_id, receipt.to_dict())
         return receipt
+
+    def _result_from_existing(
+        self,
+        *,
+        ingest_id,
+        acquisition,
+        raw_artifact,
+        receipt_ids,
+        warnings,
+        existing,
+    ) -> IngestResult:
+        existing_status = IngestStatus(existing["status"])
+        result_status = (
+            IngestStatus.DUPLICATE
+            if existing_status is IngestStatus.ACCEPTED
+            else existing_status
+        )
+        duplicate = self._receipt(
+            ingest_id=ingest_id,
+            stage="duplicate_check",
+            outcome=(
+                "DUPLICATE"
+                if result_status is IngestStatus.DUPLICATE
+                else f"DUPLICATE_{existing_status.value}"
+            ),
+            input_ids=(raw_artifact.artifact_id,),
+            details={"existing_status": existing_status.value},
+        )
+        receipt_ids.append(duplicate.receipt_id)
+        normalized = existing.get("normalized_artifact")
+        normalized_artifact = None
+        if normalized is not None:
+            from .model import Artifact
+            normalized_artifact = Artifact(**normalized)
+        if result_status is not IngestStatus.DUPLICATE:
+            warnings.append("duplicate_existing_record")
+        return IngestResult(
+            ingest_id,
+            result_status,
+            source=acquisition.source,
+            raw_artifact=raw_artifact,
+            normalized_artifact=normalized_artifact,
+            receipt_ids=tuple(receipt_ids),
+            warnings=tuple(warnings),
+            error=existing.get("error"),
+        )
+
+    def _put_record_or_existing(self, record: IngestRecord):
+        try:
+            created = self.store.put_record(record.ingest_id, record.to_dict())
+        except StoreConflict:
+            existing = self.store.get_record(record.ingest_id)
+            if (
+                existing.get("ingest_id") != record.ingest_id
+                or existing.get("raw_artifact", {}).get("sha256")
+                != record.raw_artifact.sha256
+                or existing.get("policy_id") != record.policy_id
+                or existing.get("normalizer_version") != record.normalizer_version
+            ):
+                raise
+            return existing
+        if created:
+            return None
+        return self.store.get_record(record.ingest_id)
 
     def ingest(self, source, policy: IngestPolicy | None = None) -> IngestResult:
         policy = policy or IngestPolicy()
@@ -126,27 +190,13 @@ class Ingestor:
         ingest_id = canonical_digest(identity)
 
         if self.store.has_record(ingest_id):
-            duplicate = self._receipt(
+            return self._result_from_existing(
                 ingest_id=ingest_id,
-                stage="duplicate_check",
-                outcome="DUPLICATE",
-                input_ids=(raw_artifact.artifact_id,),
-            )
-            receipt_ids.append(duplicate.receipt_id)
-            existing = self.store.get_record(ingest_id)
-            normalized = existing.get("normalized_artifact")
-            normalized_artifact = None
-            if normalized is not None:
-                from .model import Artifact
-                normalized_artifact = Artifact(**normalized)
-            return IngestResult(
-                ingest_id,
-                IngestStatus.DUPLICATE,
-                source=acquisition.source,
+                acquisition=acquisition,
                 raw_artifact=raw_artifact,
-                normalized_artifact=normalized_artifact,
-                receipt_ids=tuple(receipt_ids),
-                warnings=tuple(warnings),
+                receipt_ids=receipt_ids,
+                warnings=warnings,
+                existing=self.store.get_record(ingest_id),
             )
 
         effective_media = claimed or sniffed
@@ -173,7 +223,16 @@ class Ingestor:
                 warnings=tuple(warnings),
                 error=error,
             )
-            self.store.put_record(ingest_id, record.to_dict())
+            existing = self._put_record_or_existing(record)
+            if existing is not None:
+                return self._result_from_existing(
+                    ingest_id=ingest_id,
+                    acquisition=acquisition,
+                    raw_artifact=raw_artifact,
+                    receipt_ids=receipt_ids,
+                    warnings=warnings,
+                    existing=existing,
+                )
             return IngestResult(
                 ingest_id,
                 IngestStatus.QUARANTINED,
@@ -208,7 +267,16 @@ class Ingestor:
                 warnings=tuple(warnings),
                 error=str(exc),
             )
-            self.store.put_record(ingest_id, record.to_dict())
+            existing = self._put_record_or_existing(record)
+            if existing is not None:
+                return self._result_from_existing(
+                    ingest_id=ingest_id,
+                    acquisition=acquisition,
+                    raw_artifact=raw_artifact,
+                    receipt_ids=receipt_ids,
+                    warnings=warnings,
+                    existing=existing,
+                )
             return IngestResult(
                 ingest_id,
                 IngestStatus.QUARANTINED,
@@ -250,7 +318,18 @@ class Ingestor:
                     child_artifact_id=normalized_artifact.artifact_id,
                     receipt_id=receipt.receipt_id,
                 )
-                self.store.put_derivation(derivation_id, derivation.to_dict())
+                try:
+                    self.store.put_derivation(derivation_id, derivation.to_dict())
+                except StoreConflict:
+                    existing_derivation = self.store.get_derivation(derivation_id)
+                    if (
+                        existing_derivation.get("relation") != derivation.relation
+                        or existing_derivation.get("parent_artifact_id")
+                        != derivation.parent_artifact_id
+                        or existing_derivation.get("child_artifact_id")
+                        != derivation.child_artifact_id
+                    ):
+                        raise
                 derivation_ids.append(derivation_id)
         else:
             receipt = self._receipt(
@@ -275,7 +354,16 @@ class Ingestor:
             derivation_ids=tuple(derivation_ids),
             warnings=tuple(warnings),
         )
-        self.store.put_record(ingest_id, record.to_dict())
+        existing = self._put_record_or_existing(record)
+        if existing is not None:
+            return self._result_from_existing(
+                ingest_id=ingest_id,
+                acquisition=acquisition,
+                raw_artifact=raw_artifact,
+                receipt_ids=receipt_ids,
+                warnings=warnings,
+                existing=existing,
+            )
         final = self._receipt(
             ingest_id=ingest_id,
             stage="record",

@@ -11,7 +11,7 @@ The core rule is simple:
 ## What V1 accepts
 
 - inline text and bytes;
-- local files with optional root confinement;
+- local files with optional absolute-root confinement;
 - HTTP(S) resources with bounded size, redirects, timeouts, and private-network denial;
 - public/authenticated GitHub files through an injected transport, with mutable refs resolved to exact commits before acquisition;
 - structured message/event envelopes where event time remains distinct from ingestion/observation time.
@@ -36,12 +36,12 @@ The default `FileSystemStore` is content-addressed:
 
 Raw and normalized artifacts are immutable. Artifact identity is SHA-256 of exact persisted bytes. Ingest identity is a canonical digest over stable source identity, raw SHA-256, parser-driving media type, normalizer version, and policy identity.
 
-This means identical bytes from different sources share a content artifact while retaining distinct ingest/provenance identities.
+This means identical bytes from different sources share a content artifact while retaining distinct ingest/provenance identities. Concurrent first ingestion of the same identity is arbitrated by immutable-record identity: one record wins and equivalent contenders resolve against it instead of overwriting it.
 
 ## Status model
 
 - `ACCEPTED` — new material safely admitted and processed.
-- `DUPLICATE` — the same deterministic ingest identity already exists.
+- `DUPLICATE` — the same deterministic ingest identity already exists in `ACCEPTED` state; repeated quarantined/partial material preserves the existing non-success status.
 - `PARTIAL` — reserved for safe raw admission with incomplete optional derivations.
 - `QUARANTINED` — raw bytes are preserved but structured downstream use is withheld.
 - `REJECTED` — policy refused the material before durable artifact admission.
@@ -75,7 +75,7 @@ python -m ingest.cli message --id m-1 --source bus ./message.json
 python -m ingest.cli inspect <ingest-id>
 ```
 
-Machine-readable JSON is the default output. Use `--human` for a compact operator summary. Successful `ACCEPTED` and `DUPLICATE` results exit `0`; other result states exit `2`.
+Machine-readable JSON is the default output. Use `--human` for a compact operator summary. Successful `ACCEPTED` and accepted-record `DUPLICATE` results exit `0`; repeated quarantined/partial records retain their non-success status and exit `2`.
 
 ## Provenance discipline
 

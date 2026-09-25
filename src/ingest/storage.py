@@ -83,3 +83,6 @@ class FileSystemStore:
 
     def get_receipt(self, receipt_id: str) -> dict[str, Any]:
         return self._get_json("receipts", receipt_id)
+
+    def get_derivation(self, derivation_id: str) -> dict[str, Any]:
+        return self._get_json("derivations", derivation_id)

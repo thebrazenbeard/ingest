@@ -56,7 +56,7 @@ A `SourceRef` contains:
 - `claimed_metadata` supplied by the source or caller;
 - `observed_metadata` established by the adapter.
 
-`observed_at` never substitutes for an event timestamp supplied by source evidence.
+`observed_at` never substitutes for an event timestamp supplied by source evidence. For HTTP(S), persisted human-readable URL provenance excludes userinfo, query, and fragment; SHA-256 digests bind the exact requested/final URLs without storing likely credentials or secret query material in plaintext.
 
 ### Artifact
 
@@ -132,7 +132,9 @@ The design intentionally mirrors Project Runner's useful rule that provenance pa
 
 ### JSON
 
-- strict parse;
+- strict parse and strict JSON serialization;
+- non-finite numbers are rejected/quarantined rather than emitted as `NaN`/`Infinity`;
+- unsupported Python objects are never silently stringified;
 - canonical UTF-8 JSON;
 - sorted object keys;
 - compact separators;
@@ -159,9 +161,11 @@ No derivative is created in V1 unless a registered future parser explicitly owns
 
 `PARTIAL` is reserved for future optional derivations where the raw/core record remains safe but nonessential processing is incomplete.
 
+A repeated observation does not promote the disposition of the existing record: an accepted existing record yields `DUPLICATE`, while an existing quarantined/partial record preserves that non-success state and is marked as a duplicate observation in warnings/receipts.
+
 ## GitHub provenance
 
-A requested branch or tag is a mutable acquisition hint. The GitHub adapter resolves it to an exact commit before reading file content, and `SourceRef.source_identity` binds owner, repository, exact commit, and path. The originally requested ref remains claimed metadata.
+A requested branch or tag is a mutable acquisition hint. The GitHub adapter resolves it to an exact commit before reading file content, and `SourceRef.source_identity` binds owner, repository, exact commit, and path. The originally requested ref remains claimed metadata. When the transport does not supply a media type, the repository path provides the same extension-based structured-type hint used for local files (`.json`, `.jsonl`, and other standard mimetypes), so invalid structured files do not silently degrade into plain text solely because they came from GitHub.
 
 Credential material belongs to the transport object, not the source record, receipt, locator, or artifact.
 
@@ -171,7 +175,7 @@ V1 requires:
 
 - no acquired-code execution;
 - hard input byte ceilings;
-- local allowed-root confinement when configured;
+- local allowed-root confinement when configured, with absolute roots required for unambiguous policy identity;
 - symlink denial by default;
 - HTTPS by default;
 - HTTP only by explicit policy;
@@ -186,6 +190,8 @@ Pre-resolution private-network checks reduce SSRF exposure but do not claim comp
 ## Storage boundary
 
 V1 ships a filesystem content-addressed store. Provider databases, object stores, Supabase, vector indexes, Bus projection, and Vera-specific integrations remain downstream adapters. Core importability cannot depend on them.
+
+Concurrent same-identity ingestion is first-writer-wins only after verifying identity-defining fields. Equivalent races resolve to the already-created record/derivation; a true immutable-content conflict still raises `StoreConflict`.
 
 ## Public Python interfaces
 

@@ -14,7 +14,10 @@ class MessageAdapter:
         return isinstance(source, MessageSource)
 
     def acquire(self, source: MessageSource, policy: IngestPolicy) -> Acquisition:
-        data = canonical_json(dict(source.payload)).encode("utf-8")
+        try:
+            data = canonical_json(dict(source.payload)).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise PolicyRejected("message payload must be strict JSON data") from exc
         if len(data) > policy.max_bytes:
             raise PolicyRejected(f"message exceeds max_bytes={policy.max_bytes}")
         claimed = {"event_time": source.event_time} if source.event_time is not None else {}
