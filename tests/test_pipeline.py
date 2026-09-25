@@ -10,8 +10,7 @@ class PipelineTests(unittest.TestCase):
     def test_repeat_same_source_is_duplicate_with_stable_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             ingestor = Ingestor(FileSystemStore(Path(tmp) / ".ingest"))
-            source = TextSource("hello
-world", locator="urn:test:hello")
+            source = TextSource("hello\r\nworld", locator="urn:test:hello")
             first = ingestor.ingest(source)
             second = ingestor.ingest(source)
             self.assertEqual(first.status, IngestStatus.ACCEPTED)

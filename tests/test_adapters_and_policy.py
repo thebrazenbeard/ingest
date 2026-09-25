@@ -22,8 +22,7 @@ class FakeGitHubTransport:
 
     def fetch_file(self, owner, repository, commit, path, max_bytes):
         self.fetch_args = (owner, repository, commit, path, max_bytes)
-        return b"hello from github
-", "text/plain", {"git_blob_sha": "b" * 40, "size": 18}
+        return b"hello from github\n", "text/plain", {"git_blob_sha": "b" * 40, "size": 18}
 
 
 class AdapterPolicyTests(unittest.TestCase):
@@ -63,18 +62,13 @@ class AdapterPolicyTests(unittest.TestCase):
     def test_jsonl_file_is_canonicalized_line_by_line(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rows.jsonl"
-            path.write_text('{"b":2,"a":1}
-
-{"z":0}
-', encoding="utf-8")
+            path.write_text('{"b":2,"a":1}\n\n{"z":0}\n', encoding="utf-8")
             store = FileSystemStore(Path(tmp) / ".ingest")
             result = Ingestor(store, adapters=[FileAdapter()]).ingest(FileSource(str(path)))
             self.assertEqual(result.status, IngestStatus.ACCEPTED)
             self.assertIsNotNone(result.normalized_artifact)
             normalized = (store.root / result.normalized_artifact.storage_locator).read_bytes()
-            self.assertEqual(normalized, b'{"a":1,"b":2}
-{"z":0}
-')
+            self.assertEqual(normalized, b'{"a":1,"b":2}\n{"z":0}\n')
 
     def test_github_ref_is_resolved_to_exact_commit_in_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:
