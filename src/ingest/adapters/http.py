@@ -6,6 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from ..canonical import sha256_bytes
 from ..model import Acquisition, SourceRef, UrlSource, now_iso
 from ..policy import IngestPolicy
 from .base import AcquisitionFailed, PolicyRejected
@@ -33,6 +34,20 @@ def _host_is_forbidden(host: str) -> bool:
         ):
             return True
     return False
+
+
+def _safe_url_provenance(url: str) -> tuple[str, str]:
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise PolicyRejected("URL contains an invalid port") from exc
+    netloc = host + (f":{port}" if port is not None else "")
+    locator = parsed._replace(netloc=netloc, query="", fragment="").geturl()
+    return locator, sha256_bytes(url.encode("utf-8"))
 
 
 class HttpAdapter:
@@ -83,16 +98,21 @@ class HttpAdapter:
                 self._check_url(final_url, policy)
                 content_type = response.headers.get("Content-Type")
                 status = getattr(response, "status", None)
+            final_locator, final_url_sha256 = _safe_url_provenance(final_url)
+            _, requested_url_sha256 = _safe_url_provenance(source.url)
             return Acquisition(
                 data=data,
                 source=SourceRef(
                     scheme=urlparse(final_url).scheme,
-                    locator=final_url,
+                    locator=final_locator,
                     adapter=self.name,
                     adapter_version=self.version,
                     observed_at=now_iso(),
-                    source_identity={"url": final_url},
-                    claimed_metadata={"requested_url": source.url},
+                    source_identity={
+                        "url_locator": final_locator,
+                        "url_sha256": final_url_sha256,
+                    },
+                    claimed_metadata={"requested_url_sha256": requested_url_sha256},
                     observed_metadata={"status": status, "redirects": redirects},
                 ),
                 claimed_media_type=content_type,

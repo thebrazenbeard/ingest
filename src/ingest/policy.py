@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from .canonical import canonical_digest
 
@@ -24,6 +25,8 @@ class IngestPolicy:
             raise ValueError("timeout_seconds must be positive")
         if any(not root for root in self.allowed_roots):
             raise ValueError("allowed_roots cannot contain empty paths")
+        if any(not Path(root).expanduser().is_absolute() for root in self.allowed_roots):
+            raise ValueError("allowed_roots must be absolute paths")
 
     @property
     def policy_id(self) -> str:

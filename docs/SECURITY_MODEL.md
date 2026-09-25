@@ -6,7 +6,7 @@ Every acquired payload is untrusted data. V1 never executes, imports, evaluates,
 
 ## Local files
 
-Configured `allowed_roots` are resolved before use. Inputs resolving outside those roots are rejected. Symlinks are rejected by default. File byte length is checked before and after reading.
+Configured `allowed_roots` must be absolute paths and are resolved before use. Relative roots are rejected because the same policy digest could otherwise mean different filesystem authority under different working directories. Inputs resolving outside those roots are rejected. Symlinks are rejected by default. File byte length is checked before and after reading.
 
 ## HTTP(S)
 
@@ -14,17 +14,19 @@ HTTPS is the default. Plain HTTP requires `allow_http=True`. Each requested/redi
 
 The stdlib V1 transport performs hostname resolution checks before the request. This reduces ordinary SSRF risk but does **not** claim complete DNS-rebinding resistance because the HTTP stack may perform a second resolution. Production use against adversarial URLs should inject a transport that binds the validated IP/connection or delegates fetching to a hardened egress service.
 
+Persisted HTTP provenance strips URL userinfo, query, and fragment from the human-readable locator. Exact requested/final URL distinctions remain bound by SHA-256 digests so credentials and secret query values are not written in plaintext.
+
 ## GitHub
 
 Mutable refs are resolved to exact commits before content acquisition. Credentials are constructor/transport state and are never persisted in provenance objects or receipts. Exact commit identity is evidence of source selection, not proof that repository content is safe or true.
 
 ## Structured parsing
 
-JSON and JSONL use Python's data-only JSON parser. Claimed JSON that cannot be parsed is quarantined after raw preservation. No archive extraction is performed in V1, preventing archive-bomb/path-traversal classes from entering the core pipeline.
+JSON and JSONL use Python's data-only JSON parser and strict canonical serialization. Unsupported objects and non-finite numbers (`NaN`, `Infinity`, overflow to infinity) are not silently stringified or emitted as non-standard JSON. Claimed structured data that cannot be represented as strict JSON is quarantined after raw preservation; invalid structured message payloads are rejected before admission. No archive extraction is performed in V1, preventing archive-bomb/path-traversal classes from entering the core pipeline.
 
 ## Storage
 
-Content blobs, records, receipts, and derivations are immutable create-only paths. A collision with different bytes/content raises a store conflict. First publication writes and fsyncs a temporary file, then uses a create-only hard link so an existing immutable path is never overwritten; the temporary path is removed afterward.
+Content blobs, records, receipts, and derivations are immutable create-only paths. A collision with different bytes/content raises a store conflict. First publication writes and fsyncs a temporary file, then uses a create-only hard link so an existing immutable path is never overwritten; the temporary path is removed afterward. Concurrent attempts for the same deterministic ingest/derivation identity may accept an already-created object only after checking its identity-defining fields; semantic conflicts still fail.
 
 ## Logging and secrets
 

@@ -42,9 +42,9 @@ def normalize_bytes(data: bytes, media_type: str) -> bytes | None:
     if media_type in {"application/json", "text/json"}:
         try:
             value = json.loads(data.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return canonical_json(value).encode("utf-8")
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
             raise NormalizationError(f"invalid JSON: {exc}") from exc
-        return canonical_json(value).encode("utf-8")
     if media_type in {"application/x-ndjson", "application/jsonl"}:
         lines: list[str] = []
         try:
@@ -56,9 +56,9 @@ def normalize_bytes(data: bytes, media_type: str) -> bytes | None:
                 continue
             try:
                 value = json.loads(line)
-            except json.JSONDecodeError as exc:
+                lines.append(canonical_json(value))
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
                 raise NormalizationError(f"invalid JSONL line {index}: {exc}") from exc
-            lines.append(canonical_json(value))
         return (("\n".join(lines) + "\n") if lines else "").encode("utf-8")
     if media_type.startswith("text/"):
         try:
