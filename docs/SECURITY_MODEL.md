@@ -6,11 +6,11 @@ Every acquired payload is untrusted data. V1 never executes, imports, evaluates,
 
 ## Local files
 
-Configured `allowed_roots` must be absolute paths and are resolved before use. Relative roots are rejected because the same policy digest could otherwise mean different filesystem authority under different working directories. Inputs resolving outside those roots are rejected. Symlinks are rejected by default. File byte length is checked before and after reading.
+Configured `allowed_roots` must be absolute paths and are resolved before use. Relative roots are rejected because the same policy digest could otherwise mean different filesystem authority under different working directories. Inputs resolving outside those roots are rejected. When link following is disabled, symlink/junction traversal is rejected across the full input path, not only at the final filename. File byte length is checked before and after reading.
 
 ## HTTP(S)
 
-HTTPS is the default. Plain HTTP requires `allow_http=True`. Each requested/redirect URL is policy-checked, redirect count is bounded, reads are capped at `max_bytes + 1`, and a timeout is mandatory. Private, loopback, link-local, multicast, reserved, and unspecified destinations are denied by default.
+HTTPS is the default. Plain HTTP requires `allow_http=True`. Each requested/redirect URL is policy-checked, redirect count is bounded, reads are capped at `max_bytes + 1`, and a timeout is mandatory. A returned final URL is checked before its response body is consumed. Private, loopback, link-local, multicast, reserved, and unspecified destinations are denied by default.
 
 The stdlib V1 transport performs hostname resolution checks before the request. This reduces ordinary SSRF risk but does **not** claim complete DNS-rebinding resistance because the HTTP stack may perform a second resolution. Production use against adversarial URLs should inject a transport that binds the validated IP/connection or delegates fetching to a hardened egress service.
 
@@ -18,7 +18,7 @@ Persisted HTTP provenance strips URL userinfo, query, and fragment from the huma
 
 ## GitHub
 
-Mutable refs are resolved to exact commits before content acquisition. Credentials are constructor/transport state and are never persisted in provenance objects or receipts. Exact commit identity is evidence of source selection, not proof that repository content is safe or true.
+Mutable refs are resolved to exact commits before content acquisition. The default GitHub API transport recomputes the returned file's Git object digest and rejects a blob identity that does not match the acquired bytes. Credentials are constructor/transport state and are never persisted in provenance objects or receipts. Exact commit/blob identity is evidence of source selection, not proof that repository content is safe or true.
 
 ## Structured parsing
 
