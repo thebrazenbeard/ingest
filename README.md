@@ -94,3 +94,5 @@ No runtime dependency is required beyond Python 3.12+ for V1.
 ## Status
 
 `V0.1 SOURCE_IMPLEMENTED / LOCAL_VERIFICATION_PASS / NOT INSTALLED OR RUNTIME-CONSUMED`
+
+Repository source, installation, runtime consumption, downstream provider effects, and independent review remain separate evidence domains.
