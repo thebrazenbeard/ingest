@@ -4,6 +4,7 @@ import math
 import os
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -164,6 +165,30 @@ class EvidenceIntegrityTests(unittest.TestCase):
                 with self.assertRaises(AcquisitionFailed):
                     FileAdapter().acquire(FileSource(str(path)), IngestPolicy())
             self.assertTrue(mutated)
+
+    def test_cross_handle_ctime_drift_does_not_false_reject_local_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stable.txt"
+            path.write_bytes(b"stable")
+            real_fstat = os.fstat
+
+            def drifted_ctime(fd):
+                value = real_fstat(fd)
+                return SimpleNamespace(
+                    st_dev=value.st_dev,
+                    st_ino=value.st_ino,
+                    st_size=value.st_size,
+                    st_mtime_ns=value.st_mtime_ns,
+                    st_ctime_ns=value.st_ctime_ns + 1,
+                )
+
+            with patch("ingest.adapters.file.os.fstat", side_effect=drifted_ctime):
+                acquisition = FileAdapter().acquire(
+                    FileSource(str(path)),
+                    IngestPolicy(),
+                )
+
+            self.assertEqual(acquisition.data, b"stable")
 
     def test_local_file_same_size_replacement_before_open_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

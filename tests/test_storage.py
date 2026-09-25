@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ingest.storage import FileSystemStore
+from ingest.storage import FileSystemStore, StoreConflict
 
 
 class RecordingStore(FileSystemStore):
@@ -78,6 +78,34 @@ class StorageDurabilityTests(unittest.TestCase):
                     root / "blobs" / "sha256" / prefix,
                 ],
             )
+
+    def test_managed_directory_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            outside = Path(tmp) / "outside"
+            outside.mkdir()
+            store = FileSystemStore(root)
+            (root / "records").symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaises(StoreConflict):
+                store.put_record("record-1", {"schema": "TEST", "value": 1})
+
+            self.assertFalse((outside / "record-1.json").exists())
+
+    def test_final_immutable_symlink_is_not_accepted_as_existing_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            store = FileSystemStore(root)
+            value = {"schema": "TEST", "value": 1}
+            self.assertTrue(store.put_record("record-1", value))
+            record_path = root / "records" / "record-1.json"
+            outside = Path(tmp) / "outside-record.json"
+            outside.write_bytes(record_path.read_bytes())
+            record_path.unlink()
+            record_path.symlink_to(outside)
+
+            with self.assertRaises(StoreConflict):
+                store.put_record("record-1", value)
 
     @unittest.skipIf(os.name == "nt", "directory fsync is not portable on Windows")
     def test_posix_directory_sync_succeeds_on_real_directory(self):

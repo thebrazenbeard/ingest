@@ -177,7 +177,7 @@ V1 requires:
 - hard input byte ceilings;
 - local allowed-root confinement when configured, with absolute roots required for unambiguous policy identity;
 - full-path symlink/junction denial by default unless link following is explicitly enabled;
-- descriptor-bound local-file reads with pre-open/opened/post-read stat-signature checks and a bounded `max_bytes + 1` read;
+- descriptor-bound local-file reads with stable cross-handle identity checks, stronger same-descriptor post-read stability checks, and a bounded `max_bytes + 1` read;
 - HTTPS by default;
 - HTTP only by explicit policy;
 - bounded redirects;
@@ -190,7 +190,7 @@ The default HTTP(S) transport binds each connection to an address that passed th
 
 ## Storage boundary
 
-V1 ships a filesystem content-addressed store. Provider databases, object stores, Supabase, vector indexes, Bus projection, and Vera-specific integrations remain downstream adapters. Core importability cannot depend on them.
+V1 ships a filesystem content-addressed store. Provider databases, object stores, Supabase, vector indexes, Bus projection, and Vera-specific integrations remain downstream adapters. Core importability cannot depend on them. Managed storage components beneath the caller-selected root reject symlink/junction redirection; this protects the store's internal hierarchy without silently redefining the root path the caller chose.
 
 Concurrent same-identity ingestion is first-writer-wins only after verifying deterministic record semantics: source identity material, raw/normalized artifacts, status, evidence class, normalizer version, policy, derivation IDs, warnings, and error state must agree; non-identity source metadata, observation timestamps, and receipt IDs may differ between observations. Equivalent races resolve to the already-created record/derivation; a true immutable-content conflict still raises `StoreConflict`. For accepted intake, a `record/READY` receipt is persisted and included in the candidate record before create-only publication. The record's durable presence commits `ACCEPTED`, eliminating the former post-record final-receipt gap. Storage-directory creation is explicit rather than recursive-and-unsynced: each missing directory is created one level at a time and its parent is sync-attempted before the next level is admitted. File publication fsyncs the temporary file before create-only hard-linking it into place; POSIX hosts then attempt a containing-directory `fsync` for the final file entry. Windows and filesystems that reject directory `fsync` remain an explicit durability claim ceiling.
 

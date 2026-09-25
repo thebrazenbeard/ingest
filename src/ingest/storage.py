@@ -19,8 +19,31 @@ class FileSystemStore:
         self.root = Path(root)
         self._ensure_directory_chain(self.root)
 
+    @staticmethod
+    def _is_link_like(path: Path) -> bool:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        return bool(is_junction is not None and is_junction())
+
+    def _assert_no_managed_links(self, path: Path) -> None:
+        path = Path(path)
+        try:
+            relative = path.relative_to(self.root)
+        except ValueError as exc:
+            raise StoreConflict(f"storage path escapes root: {path}") from exc
+
+        current = self.root
+        for part in relative.parts:
+            current = current / part
+            if self._is_link_like(current):
+                raise StoreConflict(
+                    f"managed storage path cannot be a symlink or junction: {current}"
+                )
+
     def _ensure_directory_chain(self, path: Path) -> None:
         path = Path(path)
+        self._assert_no_managed_links(path)
         if path.exists():
             if not path.is_dir():
                 raise NotADirectoryError(path)
@@ -44,6 +67,7 @@ class FileSystemStore:
             except FileExistsError:
                 if not directory.is_dir():
                     raise
+            self._assert_no_managed_links(directory)
             self._fsync_directory(directory.parent)
 
     @staticmethod
@@ -65,6 +89,7 @@ class FileSystemStore:
 
     def _atomic_create(self, path: Path, data: bytes) -> bool:
         self._ensure_directory_chain(path.parent)
+        self._assert_no_managed_links(path)
         if path.exists():
             if path.read_bytes() != data:
                 raise StoreConflict(f"immutable path collision: {path}")
@@ -75,9 +100,11 @@ class FileSystemStore:
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
+            self._assert_no_managed_links(path.parent)
             try:
                 os.link(temp_name, path)
             except FileExistsError:
+                self._assert_no_managed_links(path)
                 if path.read_bytes() != data:
                     raise StoreConflict(f"immutable path collision: {path}")
                 return False

@@ -36,14 +36,17 @@ class FileAdapter:
         return False
 
     @staticmethod
-    def _stat_signature(value) -> tuple[int, int, int, int, int]:
+    def _identity_signature(value) -> tuple[int, int, int, int]:
         return (
             value.st_dev,
             value.st_ino,
             value.st_size,
             value.st_mtime_ns,
-            value.st_ctime_ns,
         )
+
+    @classmethod
+    def _stability_signature(cls, value) -> tuple[int, int, int, int, int]:
+        return (*cls._identity_signature(value), value.st_ctime_ns)
 
     def _read_bound_file(
         self,
@@ -62,7 +65,7 @@ class FileAdapter:
 
         try:
             opened_stat = os.fstat(fd)
-            if self._stat_signature(opened_stat) != self._stat_signature(expected_stat):
+            if self._identity_signature(opened_stat) != self._identity_signature(expected_stat):
                 raise AcquisitionFailed("file identity changed before acquisition")
 
             chunks: list[bytes] = []
@@ -78,7 +81,7 @@ class FileAdapter:
                 raise PolicyRejected(f"file exceeds max_bytes={policy.max_bytes}")
 
             final_stat = os.fstat(fd)
-            if self._stat_signature(final_stat) != self._stat_signature(opened_stat):
+            if self._stability_signature(final_stat) != self._stability_signature(opened_stat):
                 raise AcquisitionFailed("file changed during acquisition")
             if len(data) != opened_stat.st_size:
                 raise AcquisitionFailed("file size changed during acquisition")
