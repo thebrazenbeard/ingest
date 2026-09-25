@@ -12,7 +12,7 @@ The core rule is simple:
 
 - inline text and bytes;
 - local files with optional absolute-root confinement;
-- HTTP(S) resources with bounded size, redirects, timeouts, and private-network denial;
+- HTTP(S) resources with bounded size, redirects, timeouts, validated-address connection pinning, and private-network denial;
 - public/authenticated GitHub files through an injected transport, with mutable refs resolved to exact commits before acquisition;
 - structured message/event envelopes where event time remains distinct from ingestion/observation time.
 

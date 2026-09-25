@@ -185,7 +185,7 @@ V1 requires:
 - raw preservation before structured parsing when admission is safe;
 - no automatic archive/container extraction.
 
-Pre-resolution private-network checks reduce SSRF exposure but do not claim complete DNS-rebinding resistance. A hardened remote-fetch service can later replace the default transport behind the same adapter contract.
+The default HTTP(S) transport binds each connection to an address that passed the private-network policy check, so a later hostname re-resolution cannot silently redirect that connection onto a forbidden network. HTTPS certificate verification still uses the original hostname. Injected custom openers remain supported, but they own their own connection-binding guarantee.
 
 ## Storage boundary
 
