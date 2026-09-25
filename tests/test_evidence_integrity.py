@@ -113,7 +113,9 @@ class EvidenceIntegrityTests(unittest.TestCase):
     def test_http_source_provenance_does_not_persist_plaintext_url_secrets(self):
         url = "https://user:pass@example.com/path?token=secret&x=1"
         adapter = HttpAdapter(opener=FakeOpener())
-        with patch("ingest.adapters.http._host_is_forbidden", return_value=False):
+        with patch(
+            "ingest.adapters.http._resolve_addresses", return_value=("93.184.216.34",)
+        ):
             acquisition = adapter.acquire(UrlSource(url), IngestPolicy())
         serialized = repr(acquisition.source.to_dict())
         for secret in ("user", "pass", "secret"):
@@ -198,8 +200,10 @@ class EvidenceIntegrityTests(unittest.TestCase):
         opener = RedirectingOpener()
         adapter = HttpAdapter(opener=opener)
         with patch(
-            "ingest.adapters.http._host_is_forbidden",
-            side_effect=lambda host: host == "127.0.0.1",
+            "ingest.adapters.http._resolve_addresses",
+            side_effect=lambda host: (
+                ("127.0.0.1",) if host == "127.0.0.1" else ("93.184.216.34",)
+            ),
         ):
             with self.assertRaises(PolicyRejected):
                 adapter.acquire(UrlSource("https://example.com/start"), IngestPolicy())

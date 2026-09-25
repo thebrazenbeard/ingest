@@ -12,7 +12,7 @@ Configured `allowed_roots` must be absolute paths and are resolved before use. R
 
 HTTPS is the default. Plain HTTP requires `allow_http=True`. Each requested/redirect URL is policy-checked, redirect count is bounded, reads are capped at `max_bytes + 1`, and a timeout is mandatory. A returned final URL is checked before its response body is consumed. Private, loopback, link-local, multicast, reserved, and unspecified destinations are denied by default.
 
-The stdlib V1 transport performs hostname resolution checks before the request. This reduces ordinary SSRF risk but does **not** claim complete DNS-rebinding resistance because the HTTP stack may perform a second resolution. Production use against adversarial URLs should inject a transport that binds the validated IP/connection or delegates fetching to a hardened egress service.
+The default stdlib V1 transport resolves each destination, rejects forbidden answers under policy, and connects directly to a validated IP instead of handing the hostname back to the socket layer for a second resolution. HTTPS still uses the original hostname for TLS certificate verification. This binds the default connection to the address set that actually passed policy validation. If a caller injects a custom opener, requested/final URLs are still policy-checked, but connection binding becomes that opener's responsibility.
 
 Persisted HTTP provenance strips URL userinfo, query, and fragment from the human-readable locator. Exact requested/final URL distinctions remain bound by SHA-256 digests so credentials and secret query values are not written in plaintext.
 

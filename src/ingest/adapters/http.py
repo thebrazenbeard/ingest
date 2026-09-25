@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.request import Request
 
 from ..canonical import sha256_bytes
 from ..model import Acquisition, SourceRef, UrlSource, now_iso
@@ -12,28 +13,27 @@ from ..policy import IngestPolicy
 from .base import AcquisitionFailed, PolicyRejected
 
 
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
-        return None
+def _ip_is_forbidden(value: str) -> bool:
+    ip = ipaddress.ip_address(value)
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
 
 
-def _host_is_forbidden(host: str) -> bool:
+def _resolve_addresses(host: str) -> tuple[str, ...]:
     try:
-        addresses = socket.getaddrinfo(host, None)
+        resolved = socket.getaddrinfo(host, None)
     except socket.gaierror as exc:
         raise AcquisitionFailed(f"DNS resolution failed for {host}") from exc
-    for item in addresses:
-        ip = ipaddress.ip_address(item[4][0])
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
-            return True
-    return False
+    addresses = tuple(dict.fromkeys(item[4][0] for item in resolved))
+    if not addresses:
+        raise AcquisitionFailed(f"DNS resolution returned no addresses for {host}")
+    return addresses
 
 
 def _safe_url_provenance(url: str) -> tuple[str, str]:
@@ -50,18 +50,112 @@ def _safe_url_provenance(url: str) -> tuple[str, str]:
     return locator, sha256_bytes(url.encode("utf-8"))
 
 
+class _PinnedHTTPConnection(HTTPConnection):
+    def __init__(self, host: str, port: int, connect_ip: str, timeout: float):
+        self._connect_ip = connect_ip
+        super().__init__(host, port=port, timeout=timeout)
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._connect_ip, self.port), self.timeout, self.source_address
+        )
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class _PinnedHTTPSConnection(HTTPSConnection):
+    def __init__(self, host: str, port: int, connect_ip: str, timeout: float):
+        self._connect_ip = connect_ip
+        super().__init__(host, port=port, timeout=timeout)
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._connect_ip, self.port), self.timeout, self.source_address
+        )
+        server_hostname = self.host
+        if self._tunnel_host:
+            self._tunnel()
+            server_hostname = self._tunnel_host
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=server_hostname)
+
+
+class _PinnedResponse:
+    def __init__(self, response, connection, url: str):
+        self._response = response
+        self._connection = connection
+        self._url = url
+        self.status = response.status
+        self.headers = response.headers
+
+    def geturl(self) -> str:
+        return self._url
+
+    def read(self, limit: int) -> bytes:
+        return self._response.read(limit)
+
+    def close(self) -> None:
+        try:
+            self._response.close()
+        finally:
+            self._connection.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
+        return False
+
+
+class _PinnedOpener:
+    def open(self, request: Request, timeout: float, resolved_addresses: tuple[str, ...]):
+        parsed = urlparse(request.full_url)
+        try:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError as exc:
+            raise PolicyRejected("URL contains an invalid port") from exc
+        target = urlunparse(("", "", parsed.path or "/", parsed.params, parsed.query, ""))
+        headers = dict(request.header_items())
+        last_error = None
+        for connect_ip in resolved_addresses:
+            connection_cls = (
+                _PinnedHTTPSConnection if parsed.scheme == "https" else _PinnedHTTPConnection
+            )
+            connection = connection_cls(parsed.hostname or "", port, connect_ip, timeout)
+            try:
+                connection.request(request.get_method(), target, body=request.data, headers=headers)
+                response = connection.getresponse()
+                if not 200 <= response.status < 300:
+                    code, reason, response_headers = (
+                        response.status,
+                        response.reason,
+                        response.headers,
+                    )
+                    response.close()
+                    connection.close()
+                    raise HTTPError(request.full_url, code, reason, response_headers, None)
+                return _PinnedResponse(response, connection, request.full_url)
+            except HTTPError:
+                raise
+            except (OSError, HTTPException) as exc:
+                connection.close()
+                last_error = exc
+        raise URLError(last_error or "no validated address could be reached")
+
+
 class HttpAdapter:
     name = "http"
     version = "1"
 
     def __init__(self, opener=None):
-        self.opener = opener or build_opener(_NoRedirect())
+        self._uses_pinned_default = opener is None
+        self.opener = opener or _PinnedOpener()
 
     def supports(self, source) -> bool:
         return isinstance(source, UrlSource)
 
     @staticmethod
-    def _check_url(url: str, policy: IngestPolicy) -> None:
+    def _check_url(url: str, policy: IngestPolicy) -> tuple[str, ...] | None:
         parsed = urlparse(url)
         if parsed.scheme not in {"https", "http"}:
             raise PolicyRejected("URL scheme must be http or https")
@@ -69,17 +163,30 @@ class HttpAdapter:
             raise PolicyRejected("plain HTTP is disabled by policy")
         if not parsed.hostname:
             raise PolicyRejected("URL must include a host")
-        if policy.deny_private_networks and _host_is_forbidden(parsed.hostname):
+        if not policy.deny_private_networks:
+            return None
+        addresses = _resolve_addresses(parsed.hostname)
+        if any(_ip_is_forbidden(address) for address in addresses):
             raise PolicyRejected("private/loopback/link-local destination denied")
+        return addresses
 
     def acquire(self, source: UrlSource, policy: IngestPolicy) -> Acquisition:
         current = source.url
         redirects = 0
         while True:
-            self._check_url(current, policy)
+            resolved_addresses = self._check_url(current, policy)
             request = Request(current, headers={"User-Agent": "vera-ingest/0.1"})
             try:
-                response = self.opener.open(request, timeout=policy.timeout_seconds)
+                if self._uses_pinned_default:
+                    if resolved_addresses is None:
+                        resolved_addresses = _resolve_addresses(urlparse(current).hostname or "")
+                    response = self.opener.open(
+                        request,
+                        timeout=policy.timeout_seconds,
+                        resolved_addresses=resolved_addresses,
+                    )
+                else:
+                    response = self.opener.open(request, timeout=policy.timeout_seconds)
             except HTTPError as exc:
                 if exc.code in {301, 302, 303, 307, 308} and exc.headers.get("Location"):
                     if redirects >= policy.max_redirects:
