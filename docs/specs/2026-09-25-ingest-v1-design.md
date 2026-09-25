@@ -165,7 +165,7 @@ A repeated observation does not promote the disposition of the existing record: 
 
 ## GitHub provenance
 
-A requested branch or tag is a mutable acquisition hint. The GitHub adapter resolves it to an exact commit before reading file content, and `SourceRef.source_identity` binds owner, repository, exact commit, and path. The originally requested ref remains claimed metadata. When the transport does not supply a media type, the repository path provides the same extension-based structured-type hint used for local files (`.json`, `.jsonl`, and other standard mimetypes), so invalid structured files do not silently degrade into plain text solely because they came from GitHub.
+A requested branch or tag is a mutable acquisition hint. The GitHub adapter resolves it to an exact commit before reading file content, and `SourceRef.source_identity` binds owner, repository, exact commit, and path. The default API transport recomputes the returned file's Git object digest and rejects a reported blob identity that does not match the acquired bytes. The originally requested ref remains claimed metadata. When the transport does not supply a media type, the repository path provides the same extension-based structured-type hint used for local files (`.json`, `.jsonl`, and other standard mimetypes), so invalid structured files do not silently degrade into plain text solely because they came from GitHub.
 
 Credential material belongs to the transport object, not the source record, receipt, locator, or artifact.
 
@@ -176,7 +176,7 @@ V1 requires:
 - no acquired-code execution;
 - hard input byte ceilings;
 - local allowed-root confinement when configured, with absolute roots required for unambiguous policy identity;
-- symlink denial by default;
+- full-path symlink/junction denial by default unless link following is explicitly enabled;
 - HTTPS by default;
 - HTTP only by explicit policy;
 - bounded redirects;
@@ -202,9 +202,9 @@ Concurrent same-identity ingestion is first-writer-wins only after verifying ide
 
 ## CLI contract
 
-Commands: `text`, `file`, `url`, `github`, `message`, and `inspect`.
+Commands: `text`, `file`, `url`, `github`, `json`, `message`, and `inspect`.
 
-Default output is compact machine-readable JSON on stdout. `--human` selects a compact human summary. `ACCEPTED` and `DUPLICATE` exit `0`; all other ingest result states exit `2`.
+Default output is compact machine-readable JSON on stdout. `--human` selects a compact human summary. CLI-side `json` and `message` file/stdin reads obey `--max-bytes` before parsing, and malformed/non-object message input is returned as a governed machine-readable rejection. `ACCEPTED` and `DUPLICATE` exit `0`; all other ingest result states exit `2`.
 
 ## V1 acceptance
 
@@ -214,7 +214,7 @@ V1 is acceptable when:
 - identical source + bytes + parser semantics + policy resolve to the same ingest identity;
 - repeat ingestion reports `DUPLICATE` without overwriting prior immutable records;
 - different source identities can point to the same artifact without collapsing provenance;
-- mutable GitHub refs are resolved to exact commits;
+- mutable GitHub refs are resolved to exact commits and default-transport Git blob identity is byte-verified;
 - invalid structured claims quarantine safely after raw preservation;
 - event time and observation time remain distinct;
 - receipts can be independently digest-verified;
