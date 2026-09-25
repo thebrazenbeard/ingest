@@ -51,9 +51,15 @@ class FileAdapter:
         data = resolved.read_bytes()
         if len(data) > policy.max_bytes:
             raise PolicyRejected(f"file exceeds max_bytes={policy.max_bytes}")
-        media_type, _ = mimetypes.guess_type(resolved.name)
-        if resolved.suffix.lower() == ".jsonl":
+        if len(data) != size:
+            raise AcquisitionFailed("file size changed during acquisition")
+        suffix = resolved.suffix.lower()
+        if suffix == ".json":
+            media_type = "application/json"
+        elif suffix in {".jsonl", ".ndjson"}:
             media_type = "application/x-ndjson"
+        else:
+            media_type, _ = mimetypes.guess_type(resolved.name)
         return Acquisition(
             data=data,
             source=SourceRef(

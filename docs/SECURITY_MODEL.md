@@ -6,7 +6,7 @@ Every acquired payload is untrusted data. V1 never executes, imports, evaluates,
 
 ## Local files
 
-Configured `allowed_roots` must be absolute paths and are resolved before use. Relative roots are rejected because the same policy digest could otherwise mean different filesystem authority under different working directories. Inputs resolving outside those roots are rejected. When link following is disabled, symlink/junction traversal is rejected across the full input path, not only at the final filename. File byte length is checked before and after reading.
+Configured `allowed_roots` must be absolute paths and are resolved before use. The CLI converts operator-supplied `--root` values such as `.` to absolute paths before policy construction; the Python policy API rejects relative roots because the same policy digest could otherwise mean different filesystem authority under different working directories. Inputs resolving outside those roots are rejected. When link following is disabled, symlink/junction traversal is rejected across the full input path, not only at the final filename. File byte length is compared before and after reading, and a size change fails acquisition. V1 does not claim race-free descriptor-bound confinement against same-size replacement or adversarial path-component swaps.
 
 ## HTTP(S)
 
@@ -18,7 +18,7 @@ Persisted HTTP provenance strips URL userinfo, query, and fragment from the huma
 
 ## GitHub
 
-Mutable refs are resolved to exact commits before content acquisition. The default GitHub API transport recomputes the returned file's Git object digest and rejects a blob identity that does not match the acquired bytes. Credentials are constructor/transport state and are never persisted in provenance objects or receipts. Exact commit/blob identity is evidence of source selection, not proof that repository content is safe or true.
+Mutable refs are resolved to exact commits before content acquisition. The default GitHub API transport converts network, HTTP, and invalid-JSON failures to bounded acquisition failures; it also recomputes the returned file's Git object digest and rejects a blob identity that does not match the acquired bytes. `.json`, `.jsonl`, and `.ndjson` are parser-driving from their path extensions even if the host MIME database disagrees. Credentials are constructor/transport state and are never persisted in provenance objects or receipts. Exact commit/blob identity is evidence of source selection, not proof that repository content is safe or true.
 
 ## Structured parsing
 
@@ -26,7 +26,7 @@ JSON and JSONL use Python's data-only JSON parser and strict canonical serializa
 
 ## Storage
 
-Content blobs, records, receipts, and derivations are immutable create-only paths. A collision with different bytes/content raises a store conflict. First publication writes and fsyncs a temporary file, then uses a create-only hard link so an existing immutable path is never overwritten; the temporary path is removed afterward. Concurrent attempts for the same deterministic ingest/derivation identity may accept an already-created object only after checking its identity-defining fields; semantic conflicts still fail.
+Content blobs, records, receipts, and derivations are immutable create-only paths. A collision with different bytes/content raises a store conflict. First publication writes and fsyncs a temporary file, then uses a create-only hard link so an existing immutable path is never overwritten; the temporary path is removed afterward. Concurrent attempts for the same deterministic ingest identity may accept an already-created record only after comparing deterministic record semantics. The comparison uses source identity material and excludes non-identity source metadata, observation timestamps, and receipt IDs, which may legitimately differ between observations; semantic conflicts still fail. Accepted records bind a `record/READY` receipt before publication, and the immutable record's presence—not a later receipt—is the acceptance commit point.
 
 ## Logging and secrets
 

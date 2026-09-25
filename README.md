@@ -11,9 +11,9 @@ The core rule is simple:
 ## What V1 accepts
 
 - inline text and bytes;
-- local files with optional absolute-root confinement;
+- local files with optional absolute-root confinement (CLI `--root` values are resolved to absolute paths before policy construction);
 - HTTP(S) resources with bounded size, redirects, timeouts, and private-network denial;
-- public/authenticated GitHub files through an injected transport, with mutable refs resolved to exact commits before acquisition;
+- public/authenticated GitHub files through an injected transport, with mutable refs resolved to exact commits before acquisition and default-transport failures converted to governed acquisition failures;
 - structured message/event envelopes where event time remains distinct from ingestion/observation time.
 
 JSON and JSONL are deterministically canonicalized. UTF-8 text is normalized to NFC and LF line endings without whitespace stripping. Opaque binary data is preserved raw without pretending to understand it.
@@ -36,7 +36,7 @@ The default `FileSystemStore` is content-addressed:
 
 Raw and normalized artifacts are immutable. Artifact identity is SHA-256 of exact persisted bytes. Ingest identity is a canonical digest over stable source identity, raw SHA-256, parser-driving media type, normalizer version, and policy identity.
 
-This means identical bytes from different sources share a content artifact while retaining distinct ingest/provenance identities. Concurrent first ingestion of the same identity is arbitrated by immutable-record identity: one record wins and equivalent contenders resolve against it instead of overwriting it.
+This means identical bytes from different sources share a content artifact while retaining distinct ingest/provenance identities. Concurrent first ingestion of the same identity is arbitrated by deterministic record semantics: one record wins, equivalent contenders resolve against it, and contradictory immutable content raises a store conflict instead of being accepted as a duplicate. For accepted ingests, the final `record/READY` receipt is bound into the immutable record; durable record presence is the acceptance commit point.
 
 ## Status model
 

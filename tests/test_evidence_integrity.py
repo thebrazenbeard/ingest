@@ -6,6 +6,7 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.error import URLError
 from urllib.parse import urlparse
 from unittest.mock import patch
 
@@ -24,6 +25,7 @@ from ingest import (
 from ingest.adapters import FileAdapter, GitHubAdapter, GitHubApiTransport, HttpAdapter
 from ingest.adapters.base import AcquisitionFailed, PolicyRejected
 from ingest.canonical import canonical_json
+from ingest.storage import StoreConflict
 
 
 class InvalidJsonGitHubTransport:
@@ -44,6 +46,14 @@ class BarrierStore(FileSystemStore):
         if not exists:
             self.barrier.wait(timeout=5)
         return exists
+
+
+class TamperedConflictStore(FileSystemStore):
+    def put_record(self, ingest_id, value):
+        tampered = dict(value)
+        tampered["status"] = "QUARANTINED"
+        self._put_json("records", ingest_id, tampered)
+        raise StoreConflict("simulated semantic collision")
 
 
 class FakeResponse:
@@ -109,6 +119,65 @@ class EvidenceIntegrityTests(unittest.TestCase):
                 GitHubFileSource("owner", "repo", "main", "bad.json")
             )
             self.assertEqual(result.status, IngestStatus.QUARANTINED)
+
+    def test_local_json_extension_is_parser_driving_even_if_host_mime_db_disagrees(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad.json"
+            path.write_text('{"broken":', encoding="utf-8")
+            ingestor = Ingestor(
+                FileSystemStore(Path(tmp) / ".ingest"),
+                adapters=[FileAdapter()],
+            )
+            with patch("ingest.adapters.file.mimetypes.guess_type", return_value=("text/plain", None)):
+                result = ingestor.ingest(FileSource(str(path)))
+            self.assertEqual(result.status, IngestStatus.QUARANTINED)
+
+    def test_github_json_extension_is_parser_driving_even_if_host_mime_db_disagrees(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ingestor = Ingestor(
+                FileSystemStore(Path(tmp) / ".ingest"),
+                adapters=[GitHubAdapter(InvalidJsonGitHubTransport())],
+            )
+            with patch("ingest.adapters.github.mimetypes.guess_type", return_value=("text/plain", None)):
+                result = ingestor.ingest(
+                    GitHubFileSource("owner", "repo", "main", "bad.json")
+                )
+            self.assertEqual(result.status, IngestStatus.QUARANTINED)
+
+    def test_local_file_size_change_during_read_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "changing.txt"
+            path.write_bytes(b"a")
+            resolved = path.resolve()
+            original_read_bytes = Path.read_bytes
+
+            def mutate_then_read(target):
+                if target == resolved:
+                    target.write_bytes(b"changed")
+                return original_read_bytes(target)
+
+            with patch.object(Path, "read_bytes", mutate_then_read):
+                with self.assertRaises(AcquisitionFailed):
+                    FileAdapter().acquire(FileSource(str(path)), IngestPolicy())
+
+    def test_github_network_failure_returns_failed_result_instead_of_escaping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ingestor = Ingestor(
+                FileSystemStore(Path(tmp) / ".ingest"),
+                adapters=[GitHubAdapter(GitHubApiTransport())],
+            )
+            with patch("ingest.adapters.github.urlopen", side_effect=URLError("offline")):
+                result = ingestor.ingest(
+                    GitHubFileSource("owner", "repo", "main", "README.md")
+                )
+            self.assertEqual(result.status, IngestStatus.FAILED)
+            self.assertIn("GitHub API request failed", result.error)
+
+    def test_record_collision_with_different_semantics_is_not_accepted_as_equivalent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ingestor = Ingestor(TamperedConflictStore(Path(tmp) / ".ingest"))
+            with self.assertRaises(StoreConflict):
+                ingestor.ingest(TextSource("collision", locator="urn:collision"))
 
     def test_http_source_provenance_does_not_persist_plaintext_url_secrets(self):
         url = "https://user:pass@example.com/path?token=secret&x=1"

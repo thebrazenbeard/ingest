@@ -36,6 +36,17 @@ class PipelineTests(unittest.TestCase):
             from ingest.canonical import canonical_digest
             self.assertEqual(digest, canonical_digest(receipt))
 
+    def test_accepted_result_receipts_are_bound_into_persisted_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            result = Ingestor(store).ingest(TextSource("commit", locator="urn:commit"))
+            record = store.get_record(result.ingest_id)
+            self.assertEqual(record["status"], "ACCEPTED")
+            self.assertEqual(record["receipt_ids"], list(result.receipt_ids))
+            final_receipt = store.get_receipt(result.receipt_ids[-1])
+            self.assertEqual(final_receipt["stage"], "record")
+            self.assertEqual(final_receipt["outcome"], "READY")
+
 
 if __name__ == "__main__":
     unittest.main()

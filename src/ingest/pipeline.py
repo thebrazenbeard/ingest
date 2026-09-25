@@ -103,23 +103,47 @@ class Ingestor:
             error=existing.get("error"),
         )
 
+    @staticmethod
+    def _record_semantics(value: dict) -> dict:
+        source = value.get("source") or {}
+        return {
+            "schema": value.get("schema"),
+            "ingest_id": value.get("ingest_id"),
+            "source": {
+                "scheme": source.get("scheme"),
+                "locator": source.get("locator"),
+                "adapter": source.get("adapter"),
+                "adapter_version": source.get("adapter_version"),
+                "source_identity": source.get("source_identity"),
+            },
+            "raw_artifact": value.get("raw_artifact"),
+            "normalized_artifact": value.get("normalized_artifact"),
+            "status": value.get("status"),
+            "evidence_class": value.get("evidence_class"),
+            "normalizer_version": value.get("normalizer_version"),
+            "policy_id": value.get("policy_id"),
+            "derivation_ids": value.get("derivation_ids"),
+            "warnings": value.get("warnings"),
+            "error": value.get("error"),
+        }
+
     def _put_record_or_existing(self, record: IngestRecord):
+        candidate = record.to_dict()
         try:
-            created = self.store.put_record(record.ingest_id, record.to_dict())
+            created = self.store.put_record(record.ingest_id, candidate)
         except StoreConflict:
             existing = self.store.get_record(record.ingest_id)
-            if (
-                existing.get("ingest_id") != record.ingest_id
-                or existing.get("raw_artifact", {}).get("sha256")
-                != record.raw_artifact.sha256
-                or existing.get("policy_id") != record.policy_id
-                or existing.get("normalizer_version") != record.normalizer_version
-            ):
+            if self._record_semantics(existing) != self._record_semantics(candidate):
                 raise
             return existing
         if created:
             return None
-        return self.store.get_record(record.ingest_id)
+        existing = self.store.get_record(record.ingest_id)
+        if self._record_semantics(existing) != self._record_semantics(candidate):
+            raise StoreConflict(
+                f"record at ingest_id={record.ingest_id} has conflicting semantics"
+            )
+        return existing
 
     def ingest(self, source, policy: IngestPolicy | None = None) -> IngestResult:
         policy = policy or IngestPolicy()
@@ -341,6 +365,18 @@ class Ingestor:
             )
             receipt_ids.append(receipt.receipt_id)
 
+        record_ready = self._receipt(
+            ingest_id=ingest_id,
+            stage="record",
+            outcome="READY",
+            input_ids=(raw_artifact.artifact_id,),
+            output_ids=(() if normalized_artifact is None else (normalized_artifact.artifact_id,)),
+            details={
+                "policy_id": policy.policy_id,
+                "commit_semantics": "record_presence_commits_acceptance",
+            },
+        )
+        receipt_ids.append(record_ready.receipt_id)
         record = IngestRecord(
             ingest_id=ingest_id,
             source=acquisition.source,
@@ -364,15 +400,6 @@ class Ingestor:
                 warnings=warnings,
                 existing=existing,
             )
-        final = self._receipt(
-            ingest_id=ingest_id,
-            stage="record",
-            outcome="ACCEPTED",
-            input_ids=(raw_artifact.artifact_id,),
-            output_ids=(() if normalized_artifact is None else (normalized_artifact.artifact_id,)),
-            details={"policy_id": policy.policy_id},
-        )
-        receipt_ids.append(final.receipt_id)
         return IngestResult(
             ingest_id,
             IngestStatus.ACCEPTED,
