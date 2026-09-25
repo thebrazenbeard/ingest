@@ -112,7 +112,10 @@ def main(argv: list[str] | None = None) -> int:
         print(_human_result(payload) if args.human else json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
         return 0
 
-    allowed_roots = tuple(getattr(args, "root", ()) or ())
+    allowed_roots = tuple(
+        str(Path(root).expanduser().resolve())
+        for root in (getattr(args, "root", ()) or ())
+    )
     policy = IngestPolicy(
         max_bytes=args.max_bytes,
         allow_http=args.allow_http,
