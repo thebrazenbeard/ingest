@@ -1,8 +1,10 @@
 import base64
 import hashlib
 import math
+import os
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -144,21 +146,71 @@ class EvidenceIntegrityTests(unittest.TestCase):
                 )
             self.assertEqual(result.status, IngestStatus.QUARANTINED)
 
-    def test_local_file_size_change_during_read_is_rejected(self):
+    def test_local_file_size_change_between_validation_and_open_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "changing.txt"
             path.write_bytes(b"a")
             resolved = path.resolve()
-            original_read_bytes = Path.read_bytes
+            original_open = os.open
+            mutated = False
 
-            def mutate_then_read(target):
-                if target == resolved:
-                    target.write_bytes(b"changed")
-                return original_read_bytes(target)
+            def grow_then_open(target, flags, *args, **kwargs):
+                nonlocal mutated
+                if not mutated and Path(target) == resolved:
+                    resolved.write_bytes(b"changed")
+                    mutated = True
+                return original_open(target, flags, *args, **kwargs)
 
-            with patch.object(Path, "read_bytes", mutate_then_read):
+            with patch("os.open", side_effect=grow_then_open):
                 with self.assertRaises(AcquisitionFailed):
                     FileAdapter().acquire(FileSource(str(path)), IngestPolicy())
+            self.assertTrue(mutated)
+
+    def test_cross_handle_ctime_drift_does_not_false_reject_local_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stable.txt"
+            path.write_bytes(b"stable")
+            real_fstat = os.fstat
+
+            def drifted_ctime(fd):
+                value = real_fstat(fd)
+                return SimpleNamespace(
+                    st_dev=value.st_dev,
+                    st_ino=value.st_ino,
+                    st_size=value.st_size,
+                    st_mtime_ns=value.st_mtime_ns,
+                    st_ctime_ns=value.st_ctime_ns + 1,
+                )
+
+            with patch("ingest.adapters.file.os.fstat", side_effect=drifted_ctime):
+                acquisition = FileAdapter().acquire(
+                    FileSource(str(path)),
+                    IngestPolicy(),
+                )
+
+            self.assertEqual(acquisition.data, b"stable")
+
+    def test_local_file_same_size_replacement_before_open_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "changing.txt"
+            path.write_bytes(b"aaaa")
+            resolved = path.resolve()
+            original_open = os.open
+            replaced = False
+
+            def replace_then_open(target, flags, *args, **kwargs):
+                nonlocal replaced
+                if not replaced and Path(target) == resolved:
+                    replacement = resolved.with_name("replacement.txt")
+                    replacement.write_bytes(b"bbbb")
+                    os.replace(replacement, resolved)
+                    replaced = True
+                return original_open(target, flags, *args, **kwargs)
+
+            with patch("os.open", side_effect=replace_then_open):
+                with self.assertRaises(AcquisitionFailed):
+                    FileAdapter().acquire(FileSource(str(path)), IngestPolicy())
+            self.assertTrue(replaced)
 
     def test_github_network_failure_returns_failed_result_instead_of_escaping(self):
         with tempfile.TemporaryDirectory() as tmp:
