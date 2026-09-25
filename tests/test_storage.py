@@ -6,7 +6,9 @@ import time
 import unittest
 from pathlib import Path
 
-from ingest.storage import FileSystemStore, StoreConflict
+from ingest import Ingestor, TextSource
+from ingest.canonical import canonical_json
+from ingest.storage import FileSystemStore, StoreConflict, StoreIntegrityError
 
 
 class RecordingStore(FileSystemStore):
@@ -136,6 +138,63 @@ class StorageDurabilityTests(unittest.TestCase):
             self.assertTrue(recent_temp.exists())
             self.assertTrue(unrelated.exists())
             self.assertEqual(store.synced_directories, [records])
+
+    def test_tampered_receipt_is_rejected_on_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            result = Ingestor(store).ingest(
+                TextSource("receipt integrity", locator="urn:receipt-integrity")
+            )
+            receipt_id = result.receipt_ids[-1]
+            path = store.root / "receipts" / f"{receipt_id}.json"
+            payload = store.get_receipt(receipt_id)
+            payload["outcome"] = "TAMPERED"
+            path.write_bytes((canonical_json(payload) + "\n").encode("utf-8"))
+
+            with self.assertRaises(StoreIntegrityError):
+                store.get_receipt(receipt_id)
+
+    def test_record_read_rejects_source_metadata_inconsistent_with_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            result = Ingestor(store).ingest(
+                TextSource("source integrity", locator="urn:source-integrity")
+            )
+            path = store.root / "records" / f"{result.ingest_id}.json"
+            payload = store.get_record(result.ingest_id)
+            payload["source"]["observed_metadata"]["tampered"] = True
+            path.write_bytes((canonical_json(payload) + "\n").encode("utf-8"))
+
+            with self.assertRaises(StoreIntegrityError):
+                store.get_record(result.ingest_id)
+
+    def test_record_read_rejects_corrupted_referenced_blob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            result = Ingestor(store).ingest(
+                TextSource("blob integrity", locator="urn:blob-integrity")
+            )
+            blob_path = store.root / result.raw_artifact.storage_locator
+            blob_path.write_bytes(b"corrupted")
+
+            with self.assertRaises(StoreIntegrityError):
+                store.get_record(result.ingest_id)
+
+    def test_derivation_read_rejects_identity_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            result = Ingestor(store).ingest(
+                TextSource("hello\r\nworld", locator="urn:derivation-integrity")
+            )
+            self.assertTrue(result.derivation_ids)
+            derivation_id = result.derivation_ids[0]
+            path = store.root / "derivations" / f"{derivation_id}.json"
+            payload = store.get_derivation(derivation_id)
+            payload["relation"] = "TAMPERED_RELATION"
+            path.write_bytes((canonical_json(payload) + "\n").encode("utf-8"))
+
+            with self.assertRaises(StoreIntegrityError):
+                store.get_derivation(derivation_id)
 
     def test_cleanup_stale_temp_files_rejects_invalid_age_guard(self):
         with tempfile.TemporaryDirectory() as tmp:

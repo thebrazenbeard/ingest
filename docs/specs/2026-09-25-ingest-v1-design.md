@@ -199,14 +199,15 @@ Concurrent same-identity ingestion is first-writer-wins only after verifying det
 - `Ingestor.ingest(source, policy=None) -> IngestResult`
 - `Ingestor.ingest_many(sources, policy=None) -> list[IngestResult]`
 - adapter contract: `supports(source)` + `acquire(source, policy) -> Acquisition`
-- `FileSystemStore` artifact/record/receipt/derivation operations
+- `FileSystemStore` artifact/record/receipt/derivation operations with fail-closed read verification
+- `StoreIntegrityError` for corrupted or internally inconsistent persisted evidence
 - `FileSystemStore.cleanup_stale_temp_files(older_than_seconds=86400.0) -> {files_removed, bytes_removed}` for explicit bounded cleanup of interrupted-write residue
 
 ## CLI contract
 
 Commands: `text`, `file`, `url`, `github`, `json`, `message`, and `inspect`.
 
-Default output is compact machine-readable JSON on stdout. `--human` selects a compact human summary. File-command `--root` values are resolved to absolute paths at the CLI boundary before `IngestPolicy` is constructed; programmatic policy callers must still provide absolute roots. CLI-side `json` and `message` file/stdin reads obey `--max-bytes` before parsing, and malformed/non-object message input is returned as a governed machine-readable rejection. `ACCEPTED` and `DUPLICATE` exit `0`; all other ingest result states exit `2`.
+Default output is compact machine-readable JSON on stdout. `--human` selects a compact human summary. `inspect` performs the same deep record verification as the Python API; missing records return `NOT_FOUND`, while failed integrity checks return `CORRUPT`, both with exit code `2`. File-command `--root` values are resolved to absolute paths at the CLI boundary before `IngestPolicy` is constructed; programmatic policy callers must still provide absolute roots. CLI-side `json` and `message` file/stdin reads obey `--max-bytes` before parsing, and malformed/non-object message input is returned as a governed machine-readable rejection. `ACCEPTED` and `DUPLICATE` exit `0`; all other ingest result states exit `2`.
 
 ## V1 acceptance
 
