@@ -23,12 +23,23 @@ class FileAdapter:
             return False
         return True
 
+    @staticmethod
+    def _has_link_component(path: Path) -> bool:
+        absolute = path.absolute()
+        for component in (absolute, *absolute.parents):
+            if component.is_symlink():
+                return True
+            is_junction = getattr(component, "is_junction", None)
+            if is_junction is not None and is_junction():
+                return True
+        return False
+
     def acquire(self, source: FileSource, policy: IngestPolicy) -> Acquisition:
         path = Path(source.path).expanduser()
         if not path.exists() or not path.is_file():
             raise AcquisitionFailed(f"file not found: {path}")
-        if path.is_symlink() and not policy.follow_symlinks:
-            raise PolicyRejected("symlink input is disabled by policy")
+        if not policy.follow_symlinks and self._has_link_component(path):
+            raise PolicyRejected("symlink/junction input is disabled by policy")
         resolved = path.resolve(strict=True)
         if policy.allowed_roots:
             roots = tuple(Path(root).expanduser().resolve(strict=True) for root in policy.allowed_roots)

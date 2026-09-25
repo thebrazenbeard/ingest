@@ -91,11 +91,11 @@ class HttpAdapter:
             except URLError as exc:
                 raise AcquisitionFailed(f"HTTP acquisition failed: {exc.reason}") from exc
             with response:
+                final_url = response.geturl()
+                self._check_url(final_url, policy)
                 data = response.read(policy.max_bytes + 1)
                 if len(data) > policy.max_bytes:
                     raise PolicyRejected(f"response exceeds max_bytes={policy.max_bytes}")
-                final_url = response.geturl()
-                self._check_url(final_url, policy)
                 content_type = response.headers.get("Content-Type")
                 status = getattr(response, "status", None)
             final_locator, final_url_sha256 = _safe_url_provenance(final_url)
