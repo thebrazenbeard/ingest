@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import mimetypes
 from typing import Protocol, runtime_checkable
@@ -52,7 +53,21 @@ class GitHubApiTransport:
             raise AcquisitionFailed("GitHub file content could not be decoded") from exc
         if len(data) > max_bytes:
             raise PolicyRejected(f"GitHub file exceeds max_bytes={max_bytes}")
-        return data, None, {"git_blob_sha": payload.get("sha"), "size": size}
+
+        blob_sha = payload.get("sha")
+        if not isinstance(blob_sha, str):
+            raise AcquisitionFailed("GitHub file payload is missing blob identity")
+        git_object = f"blob {len(data)}\0".encode("ascii") + data
+        if len(blob_sha) == 40:
+            actual_blob_sha = hashlib.sha1(git_object, usedforsecurity=False).hexdigest()
+        elif len(blob_sha) == 64:
+            actual_blob_sha = hashlib.sha256(git_object).hexdigest()
+        else:
+            raise AcquisitionFailed("GitHub blob identity uses an unsupported digest length")
+        if actual_blob_sha != blob_sha.lower():
+            raise AcquisitionFailed("GitHub blob identity does not match acquired bytes")
+
+        return data, None, {"git_blob_sha": blob_sha, "size": size}
 
 
 class GitHubAdapter:

@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import math
 import tempfile
 import threading
@@ -9,6 +11,7 @@ from unittest.mock import patch
 
 from ingest import (
     BytesSource,
+    FileSource,
     FileSystemStore,
     GitHubFileSource,
     IngestPolicy,
@@ -18,7 +21,8 @@ from ingest import (
     TextSource,
     UrlSource,
 )
-from ingest.adapters import GitHubAdapter, HttpAdapter
+from ingest.adapters import FileAdapter, GitHubAdapter, GitHubApiTransport, HttpAdapter
+from ingest.adapters.base import AcquisitionFailed, PolicyRejected
 from ingest.canonical import canonical_json
 
 
@@ -155,6 +159,76 @@ class EvidenceIntegrityTests(unittest.TestCase):
                 ["ACCEPTED", "DUPLICATE"],
             )
             self.assertEqual(results[0].ingest_id, results[1].ingest_id)
+
+    def test_parent_symlink_is_rejected_when_follow_symlinks_is_false(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real_dir = root / "real"
+            real_dir.mkdir()
+            target = real_dir / "payload.txt"
+            target.write_text("secret", encoding="utf-8")
+            link_dir = root / "linked"
+            link_dir.symlink_to(real_dir, target_is_directory=True)
+
+            result = Ingestor(
+                FileSystemStore(root / ".ingest"),
+                adapters=[FileAdapter()],
+            ).ingest(FileSource(str(link_dir / "payload.txt")))
+
+            self.assertEqual(result.status, IngestStatus.REJECTED)
+            self.assertIn("symlink", result.error.lower())
+
+    def test_http_final_destination_is_checked_before_response_body_read(self):
+        class PrivateFinalResponse(FakeResponse):
+            def __init__(self):
+                super().__init__("http://127.0.0.1/private")
+                self.read_called = False
+
+            def read(self, _limit):
+                self.read_called = True
+                return b"must-not-be-read"
+
+        class RedirectingOpener:
+            def __init__(self):
+                self.response = PrivateFinalResponse()
+
+            def open(self, request, timeout):
+                return self.response
+
+        opener = RedirectingOpener()
+        adapter = HttpAdapter(opener=opener)
+        with patch(
+            "ingest.adapters.http._host_is_forbidden",
+            side_effect=lambda host: host == "127.0.0.1",
+        ):
+            with self.assertRaises(PolicyRejected):
+                adapter.acquire(UrlSource("https://example.com/start"), IngestPolicy())
+        self.assertFalse(opener.response.read_called)
+
+    def test_github_transport_rejects_blob_sha_that_does_not_match_bytes(self):
+        data = b"hello"
+        payload = {
+            "type": "file",
+            "encoding": "base64",
+            "size": len(data),
+            "sha": "0" * 40,
+            "content": base64.b64encode(data).decode("ascii"),
+        }
+        transport = GitHubApiTransport()
+        with patch.object(transport, "_json", return_value=payload):
+            with self.assertRaises(AcquisitionFailed):
+                transport.fetch_file("owner", "repo", "a" * 40, "file.txt", 100)
+
+        expected = hashlib.sha1(
+            f"blob {len(data)}\0".encode("ascii") + data
+        ).hexdigest()
+        payload["sha"] = expected
+        with patch.object(transport, "_json", return_value=payload):
+            fetched, _media_type, observed = transport.fetch_file(
+                "owner", "repo", "a" * 40, "file.txt", 100
+            )
+        self.assertEqual(fetched, data)
+        self.assertEqual(observed["git_blob_sha"], expected)
 
 
 if __name__ == "__main__":

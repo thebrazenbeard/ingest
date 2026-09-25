@@ -75,7 +75,7 @@ python -m ingest.cli message --id m-1 --source bus ./message.json
 python -m ingest.cli inspect <ingest-id>
 ```
 
-Machine-readable JSON is the default output. Use `--human` for a compact operator summary. Successful `ACCEPTED` and accepted-record `DUPLICATE` results exit `0`; repeated quarantined/partial records retain their non-success status and exit `2`.
+Machine-readable JSON is the default output. Use `--human` for a compact operator summary. `json` and `message` file/stdin reads are bounded by `--max-bytes` before parsing; malformed or non-object message input returns a machine-readable `REJECTED` result instead of an uncaught parser exit. Successful `ACCEPTED` and accepted-record `DUPLICATE` results exit `0`; repeated quarantined/partial records retain their non-success status and exit `2`.
 
 ## Provenance discipline
 
@@ -86,6 +86,7 @@ The important boundary is that Ingest adopts **mechanisms**, not donor ontologie
 ## Verification
 
 ```bash
+python -m pip install .
 python -m unittest discover -s tests -v
 ```
 
