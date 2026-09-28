@@ -17,7 +17,7 @@ from .model import (
 )
 from .normalization import NORMALIZER_VERSION, NormalizationError, normalize_bytes, sniff_media_type
 from .policy import IngestPolicy
-from .storage import FileSystemStore, StoreConflict
+from .storage import FileSystemStore, StoreConflict, StoreIntegrityError
 
 
 class Ingestor:
@@ -131,8 +131,11 @@ class Ingestor:
         candidate = record.to_dict()
         try:
             created = self.store.put_record(record.ingest_id, candidate)
-        except StoreConflict:
-            existing = self.store.get_record(record.ingest_id)
+        except StoreConflict as conflict:
+            try:
+                existing = self.store.get_record(record.ingest_id)
+            except StoreIntegrityError as integrity_error:
+                raise conflict from integrity_error
             if self._record_semantics(existing) != self._record_semantics(candidate):
                 raise
             return existing

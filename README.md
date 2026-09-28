@@ -24,7 +24,7 @@ Ingest does not decide whether a claim is true, current, canonical, authoritativ
 
 ## Storage model
 
-The default `FileSystemStore` is content-addressed:
+The default `FileSystemStore` is content-addressed. Interrupted writes can leave `.tmp-*` remnants; cleanup is explicit rather than automatic through `cleanup_stale_temp_files()`, which defaults to a 24-hour finite/non-negative age guard and reports reclaimed file/byte counts:
 
 ```text
 .ingest/
@@ -34,9 +34,9 @@ The default `FileSystemStore` is content-addressed:
   derivations/<derivation-id>.json
 ```
 
-Raw and normalized artifacts are immutable. Artifact identity is SHA-256 of exact persisted bytes. Ingest identity is a canonical digest over stable source identity, raw SHA-256, parser-driving media type, normalizer version, and policy identity.
+Raw and normalized artifacts are immutable. Artifact identity is SHA-256 of exact persisted bytes. Ingest identity is a canonical digest over stable source identity, raw SHA-256, parser-driving media type, normalizer version, and policy identity. Store reads are fail-closed: records recursively verify canonical JSON, receipt self-digests, derivation identity plus exact `normalize/PASS` parent→child receipt evidence bound to the same deterministic ingest identity, content-addressed blob metadata/bytes, and receipt/record cross-evidence before returning. Artifact size mismatches are rejected from the opened descriptor before blob bytes are read. `ingest inspect` reports corrupted records as machine-readable `CORRUPT` with exit code `2` instead of returning unverified evidence.
 
-This means identical bytes from different sources share a content artifact while retaining distinct ingest/provenance identities. Concurrent first ingestion of the same identity is arbitrated by deterministic record semantics: one record wins, equivalent contenders resolve against it, and contradictory immutable content raises a store conflict instead of being accepted as a duplicate. For accepted ingests, the final `record/READY` receipt is bound into the immutable record; durable record presence is the acceptance commit point.
+This means identical bytes from different sources share a content artifact while retaining distinct ingest/provenance identities. Local-file acquisition binds bytes to an opened descriptor and rejects ordinary identity/size/timestamp changes across validation and read. Managed storage components below the configured store root reject symlink/junction redirection before creation, collision comparison, and publication. Concurrent first ingestion of the same identity is arbitrated by deterministic record semantics: one record wins, equivalent contenders resolve against it, and contradictory immutable content raises a store conflict instead of being accepted as a duplicate. For accepted ingests, the final `record/READY` receipt is bound into the immutable record; durable record presence is the acceptance commit point. On POSIX, newly created storage-directory entries are parent-synced as the store hierarchy is built, and new immutable publications also attempt to `fsync` the containing directory after the hard-link commit.
 
 ## Status model
 

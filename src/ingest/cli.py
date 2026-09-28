@@ -17,7 +17,7 @@ from .model import (
 )
 from .pipeline import Ingestor
 from .policy import IngestPolicy
-from .storage import FileSystemStore
+from .storage import FileSystemStore, StoreIntegrityError
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -108,6 +108,24 @@ def main(argv: list[str] | None = None) -> int:
         except FileNotFoundError:
             payload = {"schema": "INGEST_INSPECT_V1", "status": "NOT_FOUND", "ingest_id": args.ingest_id}
             print(_human_result(payload) if args.human else json.dumps(payload, sort_keys=True, separators=(",", ":")))
+            return 2
+        except StoreIntegrityError as exc:
+            payload = {
+                "schema": "INGEST_INSPECT_V1",
+                "status": "CORRUPT",
+                "ingest_id": args.ingest_id,
+                "error": str(exc),
+            }
+            print(
+                _human_result(payload)
+                if args.human
+                else json.dumps(
+                    payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+            )
             return 2
         print(_human_result(payload) if args.human else json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
         return 0

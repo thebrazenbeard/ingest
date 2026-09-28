@@ -177,6 +177,7 @@ V1 requires:
 - hard input byte ceilings;
 - local allowed-root confinement when configured, with absolute roots required for unambiguous policy identity;
 - full-path symlink/junction denial by default unless link following is explicitly enabled;
+- descriptor-bound local-file reads with stable cross-handle identity checks, stronger same-descriptor post-read stability checks, and a bounded `max_bytes + 1` read;
 - HTTPS by default;
 - HTTP only by explicit policy;
 - bounded redirects;
@@ -189,22 +190,24 @@ The default HTTP(S) transport binds each connection to an address that passed th
 
 ## Storage boundary
 
-V1 ships a filesystem content-addressed store. Provider databases, object stores, Supabase, vector indexes, Bus projection, and Vera-specific integrations remain downstream adapters. Core importability cannot depend on them.
+V1 ships a filesystem content-addressed store. Provider databases, object stores, Supabase, vector indexes, Bus projection, and Vera-specific integrations remain downstream adapters. Core importability cannot depend on them. Managed storage components beneath the caller-selected root reject symlink/junction redirection; this protects the store's internal hierarchy without silently redefining the root path the caller chose.
 
-Concurrent same-identity ingestion is first-writer-wins only after verifying deterministic record semantics: source identity material, raw/normalized artifacts, status, evidence class, normalizer version, policy, derivation IDs, warnings, and error state must agree; non-identity source metadata, observation timestamps, and receipt IDs may differ between observations. Equivalent races resolve to the already-created record/derivation; a true immutable-content conflict still raises `StoreConflict`. For accepted intake, a `record/READY` receipt is persisted and included in the candidate record before create-only publication. The record's durable presence commits `ACCEPTED`, eliminating the former post-record final-receipt gap.
+Concurrent same-identity ingestion is first-writer-wins only after verifying deterministic record semantics: source identity material, raw/normalized artifacts, status, evidence class, normalizer version, policy, derivation IDs, warnings, and error state must agree; non-identity source metadata, observation timestamps, and receipt IDs may differ between observations. Equivalent races resolve to the already-created record/derivation; a true immutable-content conflict still raises `StoreConflict`. For accepted intake, a `record/READY` receipt is persisted and included in the candidate record before create-only publication. The record's durable presence commits `ACCEPTED`, eliminating the former post-record final-receipt gap. Storage-directory creation is explicit rather than recursive-and-unsynced: each missing directory is created one level at a time and its parent is sync-attempted before the next level is admitted. File publication fsyncs the temporary file before create-only hard-linking it into place; POSIX hosts then attempt a containing-directory `fsync` for the final file entry. Windows and filesystems that reject directory `fsync` remain an explicit durability claim ceiling.
 
 ## Public Python interfaces
 
 - `Ingestor.ingest(source, policy=None) -> IngestResult`
 - `Ingestor.ingest_many(sources, policy=None) -> list[IngestResult]`
 - adapter contract: `supports(source)` + `acquire(source, policy) -> Acquisition`
-- `FileSystemStore` artifact/record/receipt/derivation operations
+- `FileSystemStore` artifact/record/receipt/derivation operations with fail-closed read verification, including pre-read artifact-size checks and same-ingest derivation receipt binding
+- `StoreIntegrityError` for corrupted or internally inconsistent persisted evidence
+- `FileSystemStore.cleanup_stale_temp_files(older_than_seconds=86400.0) -> {files_removed, bytes_removed}` for explicit bounded cleanup of interrupted-write residue
 
 ## CLI contract
 
 Commands: `text`, `file`, `url`, `github`, `json`, `message`, and `inspect`.
 
-Default output is compact machine-readable JSON on stdout. `--human` selects a compact human summary. File-command `--root` values are resolved to absolute paths at the CLI boundary before `IngestPolicy` is constructed; programmatic policy callers must still provide absolute roots. CLI-side `json` and `message` file/stdin reads obey `--max-bytes` before parsing, and malformed/non-object message input is returned as a governed machine-readable rejection. `ACCEPTED` and `DUPLICATE` exit `0`; all other ingest result states exit `2`.
+Default output is compact machine-readable JSON on stdout. `--human` selects a compact human summary. `inspect` performs the same deep record verification as the Python API; missing records return `NOT_FOUND`, while failed integrity checks return `CORRUPT`, both with exit code `2`. File-command `--root` values are resolved to absolute paths at the CLI boundary before `IngestPolicy` is constructed; programmatic policy callers must still provide absolute roots. CLI-side `json` and `message` file/stdin reads obey `--max-bytes` before parsing, and malformed/non-object message input is returned as a governed machine-readable rejection. `ACCEPTED` and `DUPLICATE` exit `0`; all other ingest result states exit `2`.
 
 ## V1 acceptance
 

@@ -10,12 +10,13 @@ from .model import (
 )
 from .pipeline import Ingestor
 from .policy import IngestPolicy
-from .storage import FileSystemStore
+from .storage import FileSystemStore, StoreIntegrityError
 
 __all__ = [
     "BytesSource",
     "FileSource",
     "FileSystemStore",
+    "StoreIntegrityError",
     "GitHubFileSource",
     "IngestPolicy",
     "IngestResult",

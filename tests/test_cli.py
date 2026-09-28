@@ -7,6 +7,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from ingest import FileSystemStore, Ingestor, TextSource
 from ingest.cli import main
 
 
@@ -42,6 +43,25 @@ class CliTests(unittest.TestCase):
                 code = main(["--store", str(Path(tmp) / ".ingest"), "inspect", "f" * 64])
             self.assertEqual(code, 2)
             self.assertEqual(json.loads(output.getvalue())["status"], "NOT_FOUND")
+
+    def test_inspect_corrupt_record_is_machine_readable_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            store = FileSystemStore(root)
+            result = Ingestor(store).ingest(
+                TextSource("inspect integrity", locator="urn:inspect-integrity")
+            )
+            blob_path = root / result.raw_artifact.storage_locator
+            blob_path.write_bytes(b"corrupted")
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(["--store", str(root), "inspect", result.ingest_id])
+
+            payload = json.loads(output.getvalue())
+            self.assertEqual(code, 2)
+            self.assertEqual(payload["status"], "CORRUPT")
+            self.assertEqual(payload["ingest_id"], result.ingest_id)
 
     def test_file_root_cli_accepts_relative_operator_path(self):
         with tempfile.TemporaryDirectory() as tmp:
