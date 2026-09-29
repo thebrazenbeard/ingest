@@ -46,6 +46,10 @@ Local files use descriptor-bound streaming raw capture into CAS. Existing normal
 
 Reuses raw source chunks for exact binary/text pre-classification and skips raw-blob readback when parser-driving semantics are opaque; JSON-looking streams retain full byte classification.
 
+### PR #14 — streaming HTTP capture
+
+Moves HTTP response bodies onto the streaming CAS path while retaining redirect, timeout, validated-address, final-destination, provenance, and cleanup controls.
+
 ## Next implementation frontiers
 
 ### 1. Streaming media pre-sniff — implemented on hardening line
@@ -62,16 +66,9 @@ Design streaming-safe normalizers for:
 
 Any new normalizer version must be identity-visible.
 
-### 3. HTTP streaming acquisition
+### 3. HTTP streaming acquisition — implemented on hardening line
 
-Move the default HTTP transport from buffered response bytes to bounded chunk delivery while preserving:
-
-- address validation/pinning;
-- redirect checks;
-- timeout behavior;
-- exact URL provenance digesting;
-- hard byte ceilings;
-- failure cleanup.
+HTTP response bodies now stream through the CAS after requested/final URL validation and provenance binding while preserving address pinning, redirects, timeouts, hard byte ceilings, and response/temp cleanup.
 
 ### 4. GitHub streaming/large object path
 
