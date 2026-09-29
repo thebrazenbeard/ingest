@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ingest import Ingestor, TextSource
@@ -168,6 +169,44 @@ class StorageDurabilityTests(unittest.TestCase):
 
             with self.assertRaises(StoreIntegrityError):
                 store.get_record(result.ingest_id)
+
+    def test_repeated_blob_publication_ignores_ctime_only_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            data = b"stable-content"
+            artifact, created = store.put_blob(
+                data,
+                media_type="application/octet-stream",
+                kind="raw",
+            )
+            self.assertTrue(created)
+            real_fstat = os.fstat
+            calls = 0
+
+            def drift_ctime(fd):
+                nonlocal calls
+                value = real_fstat(fd)
+                calls += 1
+                return SimpleNamespace(
+                    st_dev=value.st_dev,
+                    st_ino=value.st_ino,
+                    st_size=value.st_size,
+                    st_mtime_ns=value.st_mtime_ns,
+                    st_ctime_ns=value.st_ctime_ns + calls,
+                )
+
+            with patch(
+                "ingest.storage.os.fstat",
+                side_effect=drift_ctime,
+            ):
+                repeated, created = store.put_blob(
+                    data,
+                    media_type="application/octet-stream",
+                    kind="raw",
+                )
+
+            self.assertFalse(created)
+            self.assertEqual(repeated.artifact_id, artifact.artifact_id)
 
     def test_repeated_blob_publication_does_not_materialize_existing_blob(self):
         with tempfile.TemporaryDirectory() as tmp:
