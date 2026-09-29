@@ -155,6 +155,16 @@ class HttpAdapter:
         return isinstance(source, UrlSource)
 
     @staticmethod
+    def _close_response(response) -> None:
+        close = getattr(response, "close", None)
+        if callable(close):
+            close()
+            return
+        exit_method = getattr(response, "__exit__", None)
+        if callable(exit_method):
+            exit_method(None, None, None)
+
+    @staticmethod
     def _check_url(url: str, policy: IngestPolicy) -> tuple[str, ...] | None:
         parsed = urlparse(url)
         if parsed.scheme not in {"https", "http"}:
@@ -252,7 +262,7 @@ class HttpAdapter:
                     },
                 )
             except Exception:
-                response.close()
+                self._close_response(response)
                 raise
             return response, source_ref, content_type
 
@@ -295,7 +305,7 @@ class HttpAdapter:
                         )
                     yield chunk
             finally:
-                response.close()
+                self._close_response(response)
 
         return StreamingAcquisition(
             chunks=chunks(),
@@ -312,22 +322,18 @@ class HttpAdapter:
             self._open_validated_response(source, policy)
         )
         try:
-            with response:
-                try:
-                    data = response.read(policy.max_bytes + 1)
-                except (OSError, HTTPException) as exc:
-                    raise AcquisitionFailed(
-                        "HTTP response read failed"
-                    ) from exc
-                if len(data) > policy.max_bytes:
-                    raise PolicyRejected(
-                        f"response exceeds max_bytes={policy.max_bytes}"
-                    )
+            try:
+                data = response.read(policy.max_bytes + 1)
+            except (OSError, HTTPException) as exc:
+                raise AcquisitionFailed(
+                    "HTTP response read failed"
+                ) from exc
+            if len(data) > policy.max_bytes:
+                raise PolicyRejected(
+                    f"response exceeds max_bytes={policy.max_bytes}"
+                )
         finally:
-            # Custom response objects may implement context management
-            # without closing themselves. Closing twice is harmless for
-            # stdlib/pinned responses and keeps adapter ownership explicit.
-            response.close()
+            self._close_response(response)
 
         return Acquisition(
             data=data,
