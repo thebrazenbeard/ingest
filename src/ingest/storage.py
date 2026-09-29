@@ -334,6 +334,128 @@ class FileSystemStore:
     def has_record(self, ingest_id: str) -> bool:
         return (self.root / "records" / f"{ingest_id}.json").is_file()
 
+    @staticmethod
+    def _is_ingest_id(value: str) -> bool:
+        return (
+            len(value) == 64
+            and all(ch in "0123456789abcdef" for ch in value)
+        )
+
+    def audit_records(self) -> dict[str, Any]:
+        records_dir = self.root / "records"
+        issues: list[dict[str, Any]] = []
+        records_checked = 0
+        records_ok = 0
+
+        if not records_dir.exists():
+            return {
+                "schema": "INGEST_RECORD_AUDIT_V1",
+                "status": "PASS",
+                "records_checked": 0,
+                "records_ok": 0,
+                "records_corrupt": 0,
+                "issues": [],
+            }
+
+        try:
+            self._assert_no_managed_links(records_dir)
+        except StoreConflict as exc:
+            return {
+                "schema": "INGEST_RECORD_AUDIT_V1",
+                "status": "CORRUPT",
+                "records_checked": 0,
+                "records_ok": 0,
+                "records_corrupt": 1,
+                "issues": [
+                    {
+                        "entry": "records",
+                        "ingest_id": None,
+                        "error": str(exc),
+                    }
+                ],
+            }
+
+        if not records_dir.is_dir():
+            return {
+                "schema": "INGEST_RECORD_AUDIT_V1",
+                "status": "CORRUPT",
+                "records_checked": 0,
+                "records_ok": 0,
+                "records_corrupt": 1,
+                "issues": [
+                    {
+                        "entry": "records",
+                        "ingest_id": None,
+                        "error": "records path is not a directory",
+                    }
+                ],
+            }
+
+        try:
+            entries = sorted(records_dir.iterdir(), key=lambda value: value.name)
+        except OSError as exc:
+            return {
+                "schema": "INGEST_RECORD_AUDIT_V1",
+                "status": "CORRUPT",
+                "records_checked": 0,
+                "records_ok": 0,
+                "records_corrupt": 1,
+                "issues": [
+                    {
+                        "entry": "records",
+                        "ingest_id": None,
+                        "error": (
+                            exc.strerror
+                            or "records directory enumeration failed"
+                        ),
+                    }
+                ],
+            }
+
+        for entry in entries:
+            ingest_id = (
+                entry.name[:-5]
+                if entry.name.endswith(".json")
+                else None
+            )
+            if (
+                self._is_link_like(entry)
+                or not entry.is_file()
+                or ingest_id is None
+                or not self._is_ingest_id(ingest_id)
+            ):
+                issues.append(
+                    {
+                        "entry": entry.name,
+                        "ingest_id": None,
+                        "error": "unexpected records directory entry",
+                    }
+                )
+                continue
+
+            records_checked += 1
+            try:
+                self.get_record(ingest_id)
+            except (FileNotFoundError, StoreIntegrityError) as exc:
+                issues.append(
+                    {
+                        "entry": entry.name,
+                        "ingest_id": ingest_id,
+                        "error": str(exc),
+                    }
+                )
+            else:
+                records_ok += 1
+
+        return {
+            "schema": "INGEST_RECORD_AUDIT_V1",
+            "status": "PASS" if not issues else "CORRUPT",
+            "records_checked": records_checked,
+            "records_ok": records_ok,
+            "records_corrupt": len(issues),
+            "issues": issues,
+        }
+
     def get_receipt(self, receipt_id: str) -> dict[str, Any]:
         payload = self._read_canonical_json("receipts", receipt_id)
         if payload.get("schema") != "INGEST_STAGE_RECEIPT_V1":
