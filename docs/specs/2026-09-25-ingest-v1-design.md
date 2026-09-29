@@ -205,9 +205,9 @@ Concurrent same-identity ingestion is first-writer-wins only after verifying det
 
 ## CLI contract
 
-Commands: `text`, `file`, `url`, `github`, `json`, `message`, and `inspect`.
+Commands: `text`, `file`, `url`, `github`, `json`, `message`, `inspect`, and `audit-records`.
 
-Default output is compact machine-readable JSON on stdout. `--human` selects a compact human summary. `inspect` performs the same deep record verification as the Python API; missing records return `NOT_FOUND`, while failed integrity checks return `CORRUPT`, both with exit code `2`. File-command `--root` values are resolved to absolute paths at the CLI boundary before `IngestPolicy` is constructed; programmatic policy callers must still provide absolute roots. CLI-side `json` and `message` file/stdin reads obey `--max-bytes` before parsing, and malformed/non-object message input is returned as a governed machine-readable rejection. `ACCEPTED` and `DUPLICATE` exit `0`; all other ingest result states exit `2`.
+Default output is compact machine-readable JSON on stdout. `--human` selects a compact human summary. `audit-records` returns `INGEST_RECORD_AUDIT_V1`, exit `0` on `PASS`, and exit `2` on `CORRUPT`; it verifies record graphs and unexpected `records/` entries but does not inventory unreferenced store objects. `inspect` performs the same deep record verification as the Python API; missing records return `NOT_FOUND`, while failed integrity checks return `CORRUPT`, both with exit code `2`. File-command `--root` values are resolved to absolute paths at the CLI boundary before `IngestPolicy` is constructed; programmatic policy callers must still provide absolute roots. CLI-side `json` and `message` file/stdin reads obey `--max-bytes` before parsing, and malformed/non-object message input is returned as a governed machine-readable rejection. `ACCEPTED` and `DUPLICATE` exit `0`; all other ingest result states exit `2`.
 
 ## V1 acceptance
 
