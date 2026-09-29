@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import uuid
 
-from .adapters import FileAdapter, GitHubAdapter, HttpAdapter, MessageAdapter, TextBytesAdapter
+from .adapters import FileAdapter, GitHubAdapter, HttpAdapter, MessageAdapter, StreamAdapter, TextBytesAdapter
 from .adapters.base import AcquisitionFailed, PolicyRejected
 from .canonical import canonical_digest
 from .model import (
@@ -31,7 +31,7 @@ from .storage import FileSystemStore, StoreConflict, StoreIntegrityError
 class Ingestor:
     def __init__(self, store: FileSystemStore, adapters=None):
         self.store = store
-        self.adapters = list(adapters or [TextBytesAdapter(), FileAdapter(), HttpAdapter(), GitHubAdapter(), MessageAdapter()])
+        self.adapters = list(adapters or [TextBytesAdapter(), StreamAdapter(), FileAdapter(), HttpAdapter(), GitHubAdapter(), MessageAdapter()])
 
     def _adapter(self, source):
         for adapter in self.adapters:

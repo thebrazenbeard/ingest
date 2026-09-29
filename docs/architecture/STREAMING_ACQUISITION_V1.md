@@ -136,3 +136,13 @@ The `Ingestor` uses this streaming path when the transport exposes it. Injected/
 Git commit identity, Git blob identity, Ingest artifact identity, and Ingest identity remain separate:
 
 `GIT_COMMIT != GIT_BLOB != ARTIFACT_ID != INGEST_ID`
+
+## Caller-provided streams
+
+`StreamSource` exposes the streaming boundary directly to upstream callers. A stream source contains a byte-chunk iterable, a required locator, an optional claimed media type, and optional stable source-identity detail. `StreamAdapter` validates chunk types and maps iterator failures into `AcquisitionFailed`; `FileSystemStore.put_blob_stream()` still owns the hard byte ceiling, incremental SHA-256, fsynced staging, create-only publication, and failed-temp cleanup.
+
+Caller source claims remain provenance, not content authority:
+
+`CALLER_SOURCE_IDENTITY != ARTIFACT_ID`
+
+The caller cannot supply or override the raw artifact digest.

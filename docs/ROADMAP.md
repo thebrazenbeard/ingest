@@ -54,6 +54,10 @@ Moves HTTP response bodies onto the streaming CAS path while retaining redirect,
 
 Moves the default GitHub transport onto metadata-preflight + raw-blob streaming while preserving exact-commit provenance and incremental Git object verification; custom non-streaming transports retain buffered fallback.
 
+### PR #21 ? caller-provided StreamSource
+
+Exposes bounded raw streaming as a first-class public source for upstream systems without forcing pre-buffering or temporary-file handoff. Caller locator/identity remains provenance; artifact identity remains byte-derived.
+
 ## Next implementation frontiers
 
 ### 1. Streaming media pre-sniff — implemented on hardening line
