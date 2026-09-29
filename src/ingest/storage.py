@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -97,8 +98,16 @@ class FileSystemStore:
         self._ensure_directory_chain(path.parent)
         self._assert_no_managed_links(path)
         if path.exists():
-            if path.read_bytes() != data:
-                raise StoreConflict(f"immutable path collision: {path}")
+            try:
+                self._verify_managed_sha256(
+                    path,
+                    expected_size=len(data),
+                    expected_sha256=sha256_bytes(data),
+                )
+            except (FileNotFoundError, StoreIntegrityError) as exc:
+                raise StoreConflict(
+                    f"immutable path collision: {path}"
+                ) from exc
             return False
         fd, temp_name = tempfile.mkstemp(prefix=".tmp-", dir=path.parent)
         try:
@@ -111,8 +120,16 @@ class FileSystemStore:
                 os.link(temp_name, path)
             except FileExistsError:
                 self._assert_no_managed_links(path)
-                if path.read_bytes() != data:
-                    raise StoreConflict(f"immutable path collision: {path}")
+                try:
+                    self._verify_managed_sha256(
+                        path,
+                        expected_size=len(data),
+                        expected_sha256=sha256_bytes(data),
+                    )
+                except (FileNotFoundError, StoreIntegrityError) as exc:
+                    raise StoreConflict(
+                        f"immutable path collision: {path}"
+                    ) from exc
                 return False
             self._fsync_directory(path.parent)
             return True
@@ -181,6 +198,15 @@ class FileSystemStore:
             value.st_ctime_ns,
         )
 
+    @staticmethod
+    def _content_read_signature(value) -> tuple[int, int, int, int]:
+        return (
+            value.st_dev,
+            value.st_ino,
+            value.st_size,
+            value.st_mtime_ns,
+        )
+
     def _read_managed_bytes(
         self,
         path: Path,
@@ -224,6 +250,67 @@ class FileSystemStore:
                     "managed storage object size changed during read"
                 )
             return data
+        except StoreIntegrityError:
+            raise
+        except OSError as exc:
+            raise StoreIntegrityError("managed storage read failed") from exc
+        finally:
+            os.close(fd)
+
+    def _verify_managed_sha256(
+        self,
+        path: Path,
+        *,
+        expected_size: int,
+        expected_sha256: str,
+    ) -> None:
+        path = Path(path)
+        self._assert_no_managed_links(path)
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags)
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise StoreIntegrityError("managed storage read failed") from exc
+
+        try:
+            opened = os.fstat(fd)
+            if opened.st_size != expected_size:
+                raise StoreIntegrityError(
+                    "managed storage object size differs before read"
+                )
+
+            digest = hashlib.sha256()
+            observed_size = 0
+            while True:
+                chunk = os.read(fd, 64 * 1024)
+                if not chunk:
+                    break
+                observed_size += len(chunk)
+                if observed_size > expected_size:
+                    raise StoreIntegrityError(
+                        "managed storage object grew during verification"
+                    )
+                digest.update(chunk)
+
+            final = os.fstat(fd)
+            if (
+                self._content_read_signature(final)
+                != self._content_read_signature(opened)
+            ):
+                raise StoreIntegrityError(
+                    "managed storage object changed during read"
+                )
+            if observed_size != opened.st_size:
+                raise StoreIntegrityError(
+                    "managed storage object size changed during read"
+                )
+            if digest.hexdigest() != expected_sha256:
+                raise StoreIntegrityError(
+                    "artifact digest does not match bytes"
+                )
         except StoreIntegrityError:
             raise
         except OSError as exc:
@@ -292,14 +379,145 @@ class FileSystemStore:
         size = value.get("size_bytes")
         if not isinstance(size, int) or isinstance(size, bool) or size < 0:
             raise StoreIntegrityError("artifact size_bytes is invalid")
-        data = self._read_managed_bytes(
+        self._verify_managed_sha256(
             self.root / expected_locator,
             expected_size=size,
+            expected_sha256=digest,
         )
-        if len(data) != size:
-            raise StoreIntegrityError("artifact size does not match bytes")
+
+    def put_blob_stream(
+        self,
+        chunks,
+        *,
+        media_type: str,
+        kind: str,
+        max_bytes: int,
+    ) -> tuple[Artifact, bool]:
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be positive")
+
+        staging_dir = self.root / "blobs" / "sha256"
+        self._ensure_directory_chain(staging_dir)
+        self._assert_no_managed_links(staging_dir)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=".tmp-",
+            dir=staging_dir,
+        )
+        temp_path = Path(temp_name)
+        digest = hashlib.sha256()
+        size_bytes = 0
+
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                for chunk in chunks:
+                    if not isinstance(
+                        chunk,
+                        (bytes, bytearray, memoryview),
+                    ):
+                        raise TypeError(
+                            "stream chunks must be bytes-like"
+                        )
+                    if not chunk:
+                        continue
+                    data = bytes(chunk)
+                    next_size = size_bytes + len(data)
+                    if next_size > max_bytes:
+                        raise ValueError(
+                            f"stream exceeds max_bytes={max_bytes}"
+                        )
+                    handle.write(data)
+                    digest.update(data)
+                    size_bytes = next_size
+
+                handle.flush()
+                os.fsync(handle.fileno())
+
+            hex_digest = digest.hexdigest()
+            relative = (
+                Path("blobs")
+                / "sha256"
+                / hex_digest[:2]
+                / hex_digest
+            )
+            final_path = self.root / relative
+            self._ensure_directory_chain(final_path.parent)
+            self._assert_no_managed_links(final_path)
+
+            if final_path.exists():
+                try:
+                    self._verify_managed_sha256(
+                        final_path,
+                        expected_size=size_bytes,
+                        expected_sha256=hex_digest,
+                    )
+                except (
+                    FileNotFoundError,
+                    StoreIntegrityError,
+                ) as exc:
+                    raise StoreConflict(
+                        f"immutable path collision: {final_path}"
+                    ) from exc
+                created = False
+            else:
+                try:
+                    os.link(temp_path, final_path)
+                except FileExistsError:
+                    self._assert_no_managed_links(final_path)
+                    try:
+                        self._verify_managed_sha256(
+                            final_path,
+                            expected_size=size_bytes,
+                            expected_sha256=hex_digest,
+                        )
+                    except (
+                        FileNotFoundError,
+                        StoreIntegrityError,
+                    ) as exc:
+                        raise StoreConflict(
+                            f"immutable path collision: {final_path}"
+                        ) from exc
+                    created = False
+                else:
+                    self._fsync_directory(final_path.parent)
+                    created = True
+
+            return (
+                Artifact(
+                    artifact_id=f"sha256:{hex_digest}",
+                    sha256=hex_digest,
+                    size_bytes=size_bytes,
+                    media_type=media_type,
+                    kind=kind,
+                    storage_locator=relative.as_posix(),
+                ),
+                created,
+            )
+        finally:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def read_blob_bytes(self, artifact: Artifact) -> bytes:
+        digest = artifact.sha256
+        expected_id = f"sha256:{digest}"
+        expected_locator = (
+            Path("blobs") / "sha256" / digest[:2] / digest
+        ).as_posix()
+        if artifact.artifact_id != expected_id:
+            raise StoreIntegrityError("artifact id does not match sha256")
+        if artifact.storage_locator != expected_locator:
+            raise StoreIntegrityError(
+                "artifact storage locator does not match sha256"
+            )
+        data = self._read_managed_bytes(
+            self.root / expected_locator,
+            expected_size=artifact.size_bytes,
+        )
         if sha256_bytes(data) != digest:
-            raise StoreIntegrityError("artifact digest does not match bytes")
+            raise StoreIntegrityError(
+                "artifact digest does not match bytes"
+            )
         return data
 
     def put_blob(self, data: bytes, *, media_type: str, kind: str) -> tuple[Artifact, bool]:

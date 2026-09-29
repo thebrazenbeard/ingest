@@ -83,6 +83,23 @@ class FakeOpener:
         return FakeResponse(request.full_url)
 
 
+class RawGitHubResponse:
+    def __init__(self, data: bytes):
+        self.data = data
+        self.offset = 0
+        self.closed = False
+
+    def read(self, limit: int) -> bytes:
+        if self.offset >= len(self.data):
+            return b""
+        chunk = self.data[self.offset : self.offset + limit]
+        self.offset += len(chunk)
+        return chunk
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class EvidenceIntegrityTests(unittest.TestCase):
     def test_repeated_quarantine_never_becomes_successful_duplicate(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -329,6 +346,102 @@ class EvidenceIntegrityTests(unittest.TestCase):
             with self.assertRaises(PolicyRejected):
                 adapter.acquire(UrlSource("https://example.com/start"), IngestPolicy())
         self.assertFalse(opener.response.read_called)
+
+    def test_github_stream_transport_verifies_raw_blob_sha(self):
+        data = b"streamed github blob"
+        expected = hashlib.sha1(
+            f"blob {len(data)}\\0".encode("ascii") + data,
+            usedforsecurity=False,
+        ).hexdigest()
+        payload = {
+            "type": "file",
+            "size": len(data),
+            "sha": expected,
+        }
+        response = RawGitHubResponse(data)
+        transport = GitHubApiTransport()
+
+        with patch.object(
+            transport,
+            "_json",
+            return_value=payload,
+        ), patch(
+            "ingest.adapters.github.urlopen",
+            return_value=response,
+        ):
+            chunks, media_type, observed = (
+                transport.fetch_file_stream(
+                    "owner",
+                    "repo",
+                    "a" * 40,
+                    "file.bin",
+                    100,
+                )
+            )
+            fetched = b"".join(chunks)
+
+        self.assertEqual(fetched, data)
+        self.assertIsNone(media_type)
+        self.assertEqual(observed["git_blob_sha"], expected)
+        self.assertTrue(response.closed)
+
+    def test_github_stream_transport_rejects_raw_blob_sha_mismatch(self):
+        data = b"tampered streamed github blob"
+        payload = {
+            "type": "file",
+            "size": len(data),
+            "sha": "0" * 40,
+        }
+        response = RawGitHubResponse(data)
+        transport = GitHubApiTransport()
+
+        with patch.object(
+            transport,
+            "_json",
+            return_value=payload,
+        ), patch(
+            "ingest.adapters.github.urlopen",
+            return_value=response,
+        ):
+            chunks, _media_type, _observed = (
+                transport.fetch_file_stream(
+                    "owner",
+                    "repo",
+                    "a" * 40,
+                    "file.bin",
+                    100,
+                )
+            )
+            with self.assertRaises(AcquisitionFailed):
+                b"".join(chunks)
+
+        self.assertTrue(response.closed)
+
+    def test_github_stream_rejects_metadata_size_before_raw_open(self):
+        payload = {
+            "type": "file",
+            "size": 101,
+            "sha": "0" * 40,
+        }
+        transport = GitHubApiTransport()
+        with patch.object(
+            transport,
+            "_json",
+            return_value=payload,
+        ), patch(
+            "ingest.adapters.github.urlopen",
+            side_effect=AssertionError(
+                "raw blob must not open after metadata size rejection"
+            ),
+        ):
+            with self.assertRaises(PolicyRejected):
+                transport.fetch_file_stream(
+                    "owner",
+                    "repo",
+                    "a" * 40,
+                    "file.bin",
+                    100,
+                )
 
     def test_github_transport_rejects_blob_sha_that_does_not_match_bytes(self):
         data = b"hello"
