@@ -169,6 +169,36 @@ class StorageDurabilityTests(unittest.TestCase):
             with self.assertRaises(StoreIntegrityError):
                 store.get_record(result.ingest_id)
 
+    def test_repeated_blob_publication_does_not_materialize_existing_blob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            data = b"x" * (256 * 1024)
+            artifact, created = store.put_blob(
+                data,
+                media_type="application/octet-stream",
+                kind="raw",
+            )
+            self.assertTrue(created)
+            blob_path = store.root / artifact.storage_locator
+            original_read_bytes = Path.read_bytes
+
+            def reject_blob_read_bytes(path):
+                if path == blob_path:
+                    raise AssertionError(
+                        "immutable collision check materialized existing blob"
+                    )
+                return original_read_bytes(path)
+
+            with patch.object(Path, "read_bytes", reject_blob_read_bytes):
+                repeated, created = store.put_blob(
+                    data,
+                    media_type="application/octet-stream",
+                    kind="raw",
+                )
+
+            self.assertFalse(created)
+            self.assertEqual(repeated.artifact_id, artifact.artifact_id)
+
     def test_record_verification_hashes_artifacts_without_materializing_blob(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FileSystemStore(Path(tmp) / ".ingest")
