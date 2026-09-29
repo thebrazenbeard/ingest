@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -231,6 +232,64 @@ class FileSystemStore:
         finally:
             os.close(fd)
 
+    def _verify_managed_sha256(
+        self,
+        path: Path,
+        *,
+        expected_size: int,
+        expected_sha256: str,
+    ) -> None:
+        path = Path(path)
+        self._assert_no_managed_links(path)
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags)
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise StoreIntegrityError("managed storage read failed") from exc
+
+        try:
+            opened = os.fstat(fd)
+            if opened.st_size != expected_size:
+                raise StoreIntegrityError(
+                    "managed storage object size differs before read"
+                )
+
+            digest = hashlib.sha256()
+            observed_size = 0
+            while True:
+                chunk = os.read(fd, 64 * 1024)
+                if not chunk:
+                    break
+                observed_size += len(chunk)
+                if observed_size > expected_size:
+                    raise StoreIntegrityError(
+                        "managed storage object grew during verification"
+                    )
+                digest.update(chunk)
+
+            final = os.fstat(fd)
+            if self._read_signature(final) != self._read_signature(opened):
+                raise StoreIntegrityError(
+                    "managed storage object changed during read"
+                )
+            if observed_size != opened.st_size:
+                raise StoreIntegrityError(
+                    "managed storage object size changed during read"
+                )
+            if digest.hexdigest() != expected_sha256:
+                raise StoreIntegrityError(
+                    "artifact digest does not match bytes"
+                )
+        except StoreIntegrityError:
+            raise
+        except OSError as exc:
+            raise StoreIntegrityError("managed storage read failed") from exc
+        finally:
+            os.close(fd)
+
     def _read_canonical_json(
         self,
         category: str,
@@ -292,15 +351,11 @@ class FileSystemStore:
         size = value.get("size_bytes")
         if not isinstance(size, int) or isinstance(size, bool) or size < 0:
             raise StoreIntegrityError("artifact size_bytes is invalid")
-        data = self._read_managed_bytes(
+        self._verify_managed_sha256(
             self.root / expected_locator,
             expected_size=size,
+            expected_sha256=digest,
         )
-        if len(data) != size:
-            raise StoreIntegrityError("artifact size does not match bytes")
-        if sha256_bytes(data) != digest:
-            raise StoreIntegrityError("artifact digest does not match bytes")
-        return data
 
     def put_blob(self, data: bytes, *, media_type: str, kind: str) -> tuple[Artifact, bool]:
         digest = sha256_bytes(data)
