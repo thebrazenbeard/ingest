@@ -313,6 +313,128 @@ SCADA polling, Bluesky plan execution, LiteLLM routing/fallback, LeechCore remot
 
 PyMoDAQ's raw/calculated split reinforces the existing Ingest direction: raw admitted bytes and normalized/derived products must remain distinguishable and linked by explicit derivation evidence. Future transforms should extend derivation semantics rather than mutating raw artifacts in place.
 
+## Additional orchestration/runtime donors — 2026-09-29
+
+### Exact bindings
+
+| Repository | Exact default-branch head |
+| --- | --- |
+| `argoproj/argo-workflows` | `main@dadd69141c570fa678f7d51ee6decfe3fa77f109` |
+| `windmill-labs/windmill` | `main@cf5c49c3dca2201f739fb872d68bcd6c0c7665f7` |
+| `rocketride-org/rocketride-server` | `develop@5a21c9c784ebee8f09cff59cb4acfcf5dbe77465` |
+
+### Argo Workflows
+
+Observed mechanisms:
+
+- Workflow status stores node lifecycle state separately from output artifact locations.
+- Artifact objects can reference prior-step artifacts and multiple repository/location types without embedding artifact bytes into workflow status.
+- Memoization records both the cache key and whether a node was created from a cache hit; cached node outputs are saved against that key.
+- Large node-status state can be offloaded, with the workflow retaining an `offloadNodeStatusVersion` that is documented as a hash of the offloaded data.
+- Artifact garbage-collection policy is explicit and independent from workflow execution success.
+
+Transfer to Ingest:
+
+- Treat external orchestration references as references to immutable evidence, not as replacements for evidence identity.
+- A future downstream orchestration projection can safely carry `ingest_id`, artifact IDs, receipt IDs, and verification state while keeping scheduler lifecycle state outside the Ingest record.
+- If Ingest later maintains secondary indexes or offloaded verification summaries, retain a digest/version that binds the externalized state.
+- Cache/memoization consumers should key on explicit deterministic evidence material and record whether a result came from reuse versus new acquisition; a cache hit must never be silently represented as a new observation.
+
+Do not transfer:
+
+- DAG execution, retries, synchronization locks, scheduling, suspend/resume, lifecycle hooks, or artifact garbage collection into the Ingest core.
+- Argo memoization keys are workflow cache semantics, not automatically suitable as Ingest identity.
+
+Useful exact-head source:
+
+- `pkg/apis/workflow/v1alpha1/workflow_types.go`
+- `workflow/controller/dag.go`
+- `workflow/hydrator/hydrator.go`
+
+### Windmill
+
+Observed mechanisms:
+
+- Jobs, completed jobs, flow-step status, retries, and worker execution are durable runtime concepts rather than one in-memory call chain.
+- Flow retry evaluation is attached to persisted flow/job state.
+- Results are serialized and stored separately from the worker process that produced them.
+- Large/object-backed data can live in workspace object storage while jobs carry references and bounded result representations.
+- Triggering, scheduling, worker execution, and result persistence are deliberately separable concerns.
+
+Transfer to Ingest:
+
+- Keep acquisition execution and durable evidence persistence separable enough that an upstream worker can crash/retry without changing evidence semantics.
+- A downstream job/orchestration layer should be able to store an Ingest result envelope by stable IDs instead of embedding arbitrary large payloads.
+- Future large-artifact support should favor content-addressed/object-store references plus verification metadata rather than expanding control-plane records with large inline data.
+- Retry provenance matters: repeated attempts should remain distinct observations/receipts while converging on the same deterministic ingest/artifact identity when the acquired evidence is actually identical.
+
+Do not transfer:
+
+- Worker queues, cron/webhook triggers, approvals, job suspension, UI generation, secret/resource management, or flow retry policy into core Ingest.
+- Windmill result serialization is execution output handling, not evidence authenticity.
+
+Useful exact-head source:
+
+- `backend/windmill-queue/src/jobs.rs`
+- `backend/windmill-worker/src/worker_flow.rs`
+- `backend/windmill-object-store/src/lib.rs`
+
+### RocketRide Server
+
+Observed mechanisms:
+
+- Portable pipeline definitions separate graph structure/connections from runtime task execution.
+- Runtime observability exposes task lifecycle, component flow traces, and status snapshots independently from pipeline definitions.
+- Current source introduces a permanent trace identity using the begin event's continuum sequence (`beginSeq`) and supports trace retrieval by that identity.
+- Run logging is modeled as an append-ordered task-event continuum with run begin/end chapters and DVR-style retrieval.
+- File storage has moved toward handle-based streaming I/O with per-connection handle ownership and bounded connection handle counts.
+- The current changelog also records media stream descriptors, end-to-end source provenance, task-file identity, and joined filesystem authorization work.
+
+Currentness discrepancy:
+
+One observability document at this exact head still says there is "no global run id" and recommends correlating runs via `beginSeq`/project/source timing, while current TypeScript/source surfaces explicitly describe the begin-event continuum sequence as the trace's permanent identity. The safe reading is that `beginSeq` is now the durable trace identity, but documentation migration is incomplete. This review does not elevate the older prose over the current source contract or pretend the discrepancy is resolved more broadly than that.
+
+Transfer to Ingest:
+
+- A future streaming acquisition session should have a stable capture/session identifier distinct from the final content digest so operators can observe an in-progress acquisition before the final artifact identity exists.
+- Append-ordered event/receipt sequences are useful for acquisition observability, but final evidence truth must remain in immutable artifacts/records and verified receipts.
+- Handle-based streaming I/O reinforces the planned large-source design: bounded incremental reads/writes, owner/session binding, deterministic close/finalize, and cleanup on aborted sessions.
+- Source provenance should travel end-to-end through streaming/media adapters instead of being reconstructed only after normalization.
+
+Do not transfer:
+
+- Pipeline execution, model/tool nodes, task scheduling, live observability transport, deployment, or agent orchestration into Ingest.
+- A runtime trace ID is not a substitute for content-addressed artifact identity.
+
+Useful exact-head source:
+
+- `packages/client-typescript/contract/versions/v1.3.d.ts`
+- `packages/client-typescript/src/client/log-stream.ts`
+- `packages/ai/src/ai/modules/task/run_log.py`
+- `packages/ai/src/ai/account/file_store.py`
+- `docs/public/product/connect/websocket/observability.md`
+
+## Revised cross-domain conclusion
+
+These orchestration/runtime donors strengthen the existing boundary rather than moving it.
+
+Ingest should become **more resumable and stream-capable without becoming a workflow engine**. The likely architecture is:
+
+1. an acquisition session has an observation/session identity while work is in progress;
+2. bytes are admitted through bounded streaming persistence;
+3. exact-byte SHA-256 remains the final artifact identity;
+4. immutable receipts record attempts, failures, retries, normalization, and finalization;
+5. external orchestrators receive stable references to records/artifacts/receipts and may cache, retry, suspend, resume, or replay around them;
+6. orchestration lifecycle state remains outside the canonical evidence record.
+
+> **HOSTILE REVIEWER:** If Argo, Windmill, and RocketRide all persist execution state, perhaps Ingest should add its own durable workflow/session engine so retries and resume are first-class.
+
+**Rejected.** Durable acquisition-session state may eventually be needed for streaming finalization/recovery, but that is not the same thing as a workflow engine. The minimum necessary session state should exist only to make one evidence admission recoverable and verifiable. DAGs, worker scheduling, approvals, general retries, routing, and application orchestration remain upstream concerns.
+
+> **HOSTILE REVIEWER:** A session ID creates a second identity system and risks confusing operators about which ID is authoritative.
+
+**Accepted as a design hazard.** Any future session/capture ID must be explicitly non-content identity. It identifies an acquisition attempt or stream before finalization; after finalization, `artifact_id` and `ingest_id` remain the evidence identities. The record should link the session rather than deriving content identity from it.
+
 ## Decision
 
 The donor review does **not** justify a new runtime dependency or immediate schema expansion.
