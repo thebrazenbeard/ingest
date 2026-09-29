@@ -96,10 +96,10 @@ A derivation is a typed immutable edge between artifacts. V1 uses `NORMALIZED_FR
 
 ## Pipeline
 
-1. **Acquire** through a source adapter.
-2. **Bound** size and source-policy constraints.
-3. **Sniff** content type and compare it with claimed type.
-4. **Persist raw** bytes to content-addressed storage.
+1. **Acquire** through a source adapter; adapters may use the byte-oriented contract or the optional streaming contract.
+2. **Bound** size and source-policy constraints while reading, not only after acquisition.
+3. **Persist raw** bytes to content-addressed storage; streaming adapters hash and stage exact bytes incrementally before create-only publication.
+4. **Sniff** content type and compare it with claimed type. The current V1 normalizer is still byte-oriented, so this stage may materialize a verified raw artifact after streaming capture.
 5. **Identify ingest** from stable source identity, raw hash, parser-driving media type, normalizer version, and policy digest.
 6. **Deduplicate** by exact ingest identity.
 7. **Normalize** only supported formats.
@@ -177,7 +177,7 @@ V1 requires:
 - hard input byte ceilings;
 - local allowed-root confinement when configured, with absolute roots required for unambiguous policy identity;
 - full-path symlink/junction denial by default unless link following is explicitly enabled;
-- descriptor-bound local-file reads with stable cross-handle identity checks, stronger same-descriptor post-read stability checks, and a bounded `max_bytes + 1` read;
+- descriptor-bound local-file reads with stable cross-handle identity checks, stronger same-descriptor post-read stability checks, bounded chunked raw persistence, and a hard `max_bytes` ceiling;
 - HTTPS by default;
 - HTTP only by explicit policy;
 - bounded redirects;
@@ -198,8 +198,8 @@ Concurrent same-identity ingestion is first-writer-wins only after verifying det
 
 - `Ingestor.ingest(source, policy=None) -> IngestResult`
 - `Ingestor.ingest_many(sources, policy=None) -> list[IngestResult]`
-- adapter contract: `supports(source)` + `acquire(source, policy) -> Acquisition`
-- `FileSystemStore` artifact/record/receipt/derivation operations with fail-closed read verification, including pre-read artifact-size checks and same-ingest derivation receipt binding
+- adapter contract: `supports(source)` + `acquire(source, policy) -> Acquisition`; adapters may additionally implement `acquire_stream(source, policy) -> StreamingAcquisition` for bounded raw streaming
+- `FileSystemStore` artifact/record/receipt/derivation operations with fail-closed read verification, including incremental artifact hashing, bounded immutable collision verification, streaming blob publication, pre-read artifact-size checks, and same-ingest derivation receipt binding
 - `StoreIntegrityError` for corrupted or internally inconsistent persisted evidence
 - `FileSystemStore.cleanup_stale_temp_files(older_than_seconds=86400.0) -> {files_removed, bytes_removed}` for explicit bounded cleanup of interrupted-write residue
 
