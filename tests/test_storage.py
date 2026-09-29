@@ -169,6 +169,30 @@ class StorageDurabilityTests(unittest.TestCase):
             with self.assertRaises(StoreIntegrityError):
                 store.get_record(result.ingest_id)
 
+    def test_record_verification_hashes_artifacts_without_materializing_blob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            result = Ingestor(store).ingest(
+                TextSource("x" * (256 * 1024), locator="urn:stream-verify")
+            )
+            original_read = store._read_managed_bytes
+
+            def reject_blob_materialization(path, *, expected_size=None):
+                if "blobs" in Path(path).parts:
+                    raise AssertionError(
+                        "artifact verification materialized blob bytes"
+                    )
+                return original_read(path, expected_size=expected_size)
+
+            with patch.object(
+                store,
+                "_read_managed_bytes",
+                side_effect=reject_blob_materialization,
+            ):
+                record = store.get_record(result.ingest_id)
+
+            self.assertEqual(record["ingest_id"], result.ingest_id)
+
     def test_artifact_size_mismatch_is_rejected_before_blob_read(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FileSystemStore(Path(tmp) / ".ingest")
