@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "INGEST_STORE_AUDIT_V1",
+  "type": "object",
+  "required": [
+    "schema",
+    "status",
+    "records_checked",
+    "records_ok",
+    "records_corrupt",
+    "inventory",
+    "unreferenced_blobs",
+    "unreferenced_receipts",
+    "unreferenced_derivations",
+    "stale_temp_files",
+    "issues"
+  ],
+  "properties": {
+    "schema": {
+      "const": "INGEST_STORE_AUDIT_V1"
+    },
+    "status": {
+      "enum": [
+        "PASS",
+        "ISSUES",
+        "CORRUPT"
+      ]
+    },
+    "records_checked": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "records_ok": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "records_corrupt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "inventory": {
+      "$ref": "#/$defs/inventory"
+    },
+    "unreferenced_blobs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "uniqueItems": true
+    },
+    "unreferenced_receipts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "unreferenced_derivations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "stale_temp_files": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/issue"
+      }
+    }
+  },
+  "$defs": {
+    "inventory": {
+      "type": "object",
+      "required": [
+        "records",
+        "blobs",
+        "receipts",
+        "derivations",
+        "temp_files"
+      ],
+      "properties": {
+        "records": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "blobs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "receipts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "derivations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "temp_files": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "issue": {
+      "type": "object",
+      "required": [
+        "kind",
+        "entry",
+        "error"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "store_unreadable",
+            "unexpected_entry",
+            "record_corrupt",
+            "receipt_corrupt",
+            "derivation_corrupt",
+            "blob_corrupt"
+          ]
+        },
+        "entry": {
+          "type": "string",
+          "minLength": 1
+        },
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ingest_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "derivation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifact_id": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -7,7 +7,7 @@ Date: 2026-09-29
 
 `audit-store` is a read-only inventory and integrity surface for the filesystem store. It answers a different question from `audit-records`:
 
-- `audit-records`: are the persisted record graphs valid?
+- `audit-records`: are the persisted record graphs valid? Its machine contract is [`../../schemas/ingest-record-audit-v1.schema.json`](../../schemas/ingest-record-audit-v1.schema.json).
 - `audit-store`: what published objects exist across every managed namespace, which are reachable from valid record graphs, and which structural/integrity problems are present?
 
 The command never deletes, rewrites, quarantines, or repairs evidence.
@@ -15,6 +15,8 @@ The command never deletes, rewrites, quarantines, or repairs evidence.
 ## Report contract
 
 Schema: `INGEST_STORE_AUDIT_V1`
+
+JSON Schema: [`../../schemas/ingest-store-audit-v1.schema.json`](../../schemas/ingest-store-audit-v1.schema.json)
 
 Statuses:
 
