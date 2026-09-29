@@ -198,6 +198,15 @@ class FileSystemStore:
             value.st_ctime_ns,
         )
 
+    @staticmethod
+    def _content_read_signature(value) -> tuple[int, int, int, int]:
+        return (
+            value.st_dev,
+            value.st_ino,
+            value.st_size,
+            value.st_mtime_ns,
+        )
+
     def _read_managed_bytes(
         self,
         path: Path,
@@ -287,7 +296,10 @@ class FileSystemStore:
                 digest.update(chunk)
 
             final = os.fstat(fd)
-            if self._read_signature(final) != self._read_signature(opened):
+            if (
+                self._content_read_signature(final)
+                != self._content_read_signature(opened)
+            ):
                 raise StoreIntegrityError(
                     "managed storage object changed during read"
                 )
