@@ -98,8 +98,16 @@ class FileSystemStore:
         self._ensure_directory_chain(path.parent)
         self._assert_no_managed_links(path)
         if path.exists():
-            if path.read_bytes() != data:
-                raise StoreConflict(f"immutable path collision: {path}")
+            try:
+                self._verify_managed_sha256(
+                    path,
+                    expected_size=len(data),
+                    expected_sha256=sha256_bytes(data),
+                )
+            except (FileNotFoundError, StoreIntegrityError) as exc:
+                raise StoreConflict(
+                    f"immutable path collision: {path}"
+                ) from exc
             return False
         fd, temp_name = tempfile.mkstemp(prefix=".tmp-", dir=path.parent)
         try:
@@ -112,8 +120,16 @@ class FileSystemStore:
                 os.link(temp_name, path)
             except FileExistsError:
                 self._assert_no_managed_links(path)
-                if path.read_bytes() != data:
-                    raise StoreConflict(f"immutable path collision: {path}")
+                try:
+                    self._verify_managed_sha256(
+                        path,
+                        expected_size=len(data),
+                        expected_sha256=sha256_bytes(data),
+                    )
+                except (FileNotFoundError, StoreIntegrityError) as exc:
+                    raise StoreConflict(
+                        f"immutable path collision: {path}"
+                    ) from exc
                 return False
             self._fsync_directory(path.parent)
             return True
