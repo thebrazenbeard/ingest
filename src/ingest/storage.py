@@ -498,6 +498,28 @@ class FileSystemStore:
             except FileNotFoundError:
                 pass
 
+    def read_blob_bytes(self, artifact: Artifact) -> bytes:
+        digest = artifact.sha256
+        expected_id = f"sha256:{digest}"
+        expected_locator = (
+            Path("blobs") / "sha256" / digest[:2] / digest
+        ).as_posix()
+        if artifact.artifact_id != expected_id:
+            raise StoreIntegrityError("artifact id does not match sha256")
+        if artifact.storage_locator != expected_locator:
+            raise StoreIntegrityError(
+                "artifact storage locator does not match sha256"
+            )
+        data = self._read_managed_bytes(
+            self.root / expected_locator,
+            expected_size=artifact.size_bytes,
+        )
+        if sha256_bytes(data) != digest:
+            raise StoreIntegrityError(
+                "artifact digest does not match bytes"
+            )
+        return data
+
     def put_blob(self, data: bytes, *, media_type: str, kind: str) -> tuple[Artifact, bool]:
         digest = sha256_bytes(data)
         relative = Path("blobs") / "sha256" / digest[:2] / digest

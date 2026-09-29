@@ -7,6 +7,7 @@ from .adapters import FileAdapter, GitHubAdapter, HttpAdapter, MessageAdapter, T
 from .adapters.base import AcquisitionFailed, PolicyRejected
 from .canonical import canonical_digest
 from .model import (
+    Acquisition,
     Derivation,
     EvidenceClass,
     IngestRecord,
@@ -151,16 +152,54 @@ class Ingestor:
     def ingest(self, source, policy: IngestPolicy | None = None) -> IngestResult:
         policy = policy or IngestPolicy()
         policy.validate()
-        receipt_ids: list[str] = []
-        warnings: list[str] = []
         try:
             adapter = self._adapter(source)
+            stream_acquire = getattr(adapter, "acquire_stream", None)
+            if callable(stream_acquire):
+                streaming = stream_acquire(source, policy)
+                if streaming is not None:
+                    raw_artifact, created = self.store.put_blob_stream(
+                        streaming.chunks,
+                        media_type="application/octet-stream",
+                        kind="raw",
+                        max_bytes=policy.max_bytes,
+                    )
+                    raw_bytes = self.store.read_blob_bytes(raw_artifact)
+                    acquisition = Acquisition(
+                        data=raw_bytes,
+                        source=streaming.source,
+                        claimed_media_type=streaming.claimed_media_type,
+                    )
+                    return self._ingest_acquisition(
+                        acquisition,
+                        policy,
+                        pre_persisted_raw=(raw_artifact, created),
+                    )
             acquisition = adapter.acquire(source, policy)
         except PolicyRejected as exc:
             return IngestResult(None, IngestStatus.REJECTED, error=str(exc))
         except AcquisitionFailed as exc:
             return IngestResult(None, IngestStatus.FAILED, error=str(exc))
+        except ValueError as exc:
+            return IngestResult(None, IngestStatus.REJECTED, error=str(exc))
+        except StoreIntegrityError as exc:
+            return IngestResult(
+                None,
+                IngestStatus.FAILED,
+                error=f"raw artifact verification failed: {exc}",
+            )
 
+        return self._ingest_acquisition(acquisition, policy)
+
+    def _ingest_acquisition(
+        self,
+        acquisition: Acquisition,
+        policy: IngestPolicy,
+        *,
+        pre_persisted_raw=None,
+    ) -> IngestResult:
+        receipt_ids: list[str] = []
+        warnings: list[str] = []
         acquire_receipt = self._receipt(
             ingest_id=None,
             stage="acquire",
@@ -194,9 +233,18 @@ class Ingestor:
         if claimed and claimed != sniffed:
             warnings.append(f"media_type_mismatch: claimed={claimed} sniffed={sniffed}")
         raw_media = sniffed
-        raw_artifact, created = self.store.put_blob(
-            acquisition.data, media_type=raw_media, kind="raw"
-        )
+        if pre_persisted_raw is None:
+            raw_artifact, created = self.store.put_blob(
+                acquisition.data,
+                media_type=raw_media,
+                kind="raw",
+            )
+        else:
+            raw_artifact, created = pre_persisted_raw
+            raw_artifact = replace(
+                raw_artifact,
+                media_type=raw_media,
+            )
         raw_receipt = self._receipt(
             ingest_id=None,
             stage="persist_raw",
@@ -413,6 +461,7 @@ class Ingestor:
             derivation_ids=tuple(derivation_ids),
             warnings=tuple(warnings),
         )
+
 
     def ingest_many(self, sources, policy: IngestPolicy | None = None) -> list[IngestResult]:
         return [self.ingest(source, policy=policy) for source in sources]
