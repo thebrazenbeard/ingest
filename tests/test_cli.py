@@ -85,6 +85,26 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["status"], "CORRUPT")
             self.assertEqual(payload["records_corrupt"], 1)
 
+    def test_audit_store_cli_reports_inventory_issues(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            store = FileSystemStore(root)
+            orphan, _created = store.put_blob(
+                b"orphan",
+                media_type="application/octet-stream",
+                kind="raw",
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(["--store", str(root), "audit-store"])
+
+            payload = json.loads(output.getvalue())
+            self.assertEqual(code, 2)
+            self.assertEqual(payload["schema"], "INGEST_STORE_AUDIT_V1")
+            self.assertEqual(payload["status"], "ISSUES")
+            self.assertIn(orphan.artifact_id, payload["unreferenced_blobs"])
+
     def test_file_root_cli_accepts_relative_operator_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             previous = os.getcwd()

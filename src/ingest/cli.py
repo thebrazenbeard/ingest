@@ -64,6 +64,10 @@ def _parser() -> argparse.ArgumentParser:
         "audit-records",
         help="deep-verify every persisted ingest record graph",
     )
+    sub.add_parser(
+        "audit-store",
+        help="inventory and verify all managed persisted store objects",
+    )
     return parser
 
 
@@ -84,6 +88,19 @@ def _read_bytes(path: str, max_bytes: int) -> bytes:
 
 
 def _human_result(payload: dict) -> str:
+    if payload.get("schema") == "INGEST_STORE_AUDIT_V1":
+        inventory = payload["inventory"]
+        return (
+            f"{payload['status']} "
+            f"records={inventory['records']} "
+            f"blobs={inventory['blobs']} "
+            f"receipts={inventory['receipts']} "
+            f"derivations={inventory['derivations']} "
+            f"unreferenced="
+            f"{len(payload['unreferenced_blobs']) + len(payload['unreferenced_receipts']) + len(payload['unreferenced_derivations'])} "
+            f"stale_temps={len(payload['stale_temp_files'])} "
+            f"corrupt={len(payload['issues'])}"
+        )
     if payload.get("schema") == "INGEST_RECORD_AUDIT_V1":
         return (
             f"{payload['status']} "
@@ -113,6 +130,20 @@ def _emit_result(result: IngestResult, human: bool) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     store = FileSystemStore(args.store)
+
+    if args.command == "audit-store":
+        payload = store.audit_store()
+        print(
+            _human_result(payload)
+            if args.human
+            else json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        )
+        return 0 if payload["status"] == "PASS" else 2
 
     if args.command == "audit-records":
         payload = store.audit_records()
