@@ -403,7 +403,6 @@ class Ingestor:
                             self.store.iter_blob_chunks(raw_artifact)
                         ),
                         media_type=effective_media,
-                        kind="normalized",
                     )
                 )
                 normalized_bytes = None
