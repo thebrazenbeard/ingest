@@ -312,6 +312,61 @@ class StorageDurabilityTests(unittest.TestCase):
                             older_than_seconds=value,
                         )
 
+
+    def test_audit_records_passes_clean_record_graphs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            Ingestor(store).ingest(TextSource("one", locator="urn:audit:one"))
+            Ingestor(store).ingest(TextSource("two", locator="urn:audit:two"))
+
+            report = store.audit_records()
+
+            self.assertEqual(report["schema"], "INGEST_RECORD_AUDIT_V1")
+            self.assertEqual(report["status"], "PASS")
+            self.assertEqual(report["records_checked"], 2)
+            self.assertEqual(report["records_ok"], 2)
+            self.assertEqual(report["records_corrupt"], 0)
+            self.assertEqual(report["issues"], [])
+
+    def test_audit_records_collects_corruption_without_stopping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            good = Ingestor(store).ingest(
+                TextSource("good", locator="urn:audit:good")
+            )
+            bad = Ingestor(store).ingest(
+                TextSource("bad", locator="urn:audit:bad")
+            )
+            bad_blob = store.root / bad.raw_artifact.storage_locator
+            bad_blob.write_bytes(b"corrupt")
+
+            report = store.audit_records()
+
+            self.assertEqual(report["status"], "CORRUPT")
+            self.assertEqual(report["records_checked"], 2)
+            self.assertEqual(report["records_ok"], 1)
+            self.assertEqual(report["records_corrupt"], 1)
+            self.assertEqual(len(report["issues"]), 1)
+            self.assertEqual(report["issues"][0]["ingest_id"], bad.ingest_id)
+            self.assertNotEqual(good.ingest_id, bad.ingest_id)
+
+    def test_audit_records_flags_unexpected_record_directory_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            records = store.root / "records"
+            records.mkdir()
+            (records / "not-a-record.tmp").write_bytes(b"junk")
+
+            report = store.audit_records()
+
+            self.assertEqual(report["status"], "CORRUPT")
+            self.assertEqual(report["records_checked"], 0)
+            self.assertEqual(report["records_corrupt"], 1)
+            self.assertEqual(
+                report["issues"][0]["entry"],
+                "not-a-record.tmp",
+            )
+
     @unittest.skipIf(os.name == "nt", "directory fsync is not portable on Windows")
     def test_posix_directory_sync_succeeds_on_real_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

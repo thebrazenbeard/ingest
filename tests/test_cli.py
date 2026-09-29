@@ -63,6 +63,28 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["status"], "CORRUPT")
             self.assertEqual(payload["ingest_id"], result.ingest_id)
 
+
+    def test_audit_records_cli_reports_corruption(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            store = FileSystemStore(root)
+            result = Ingestor(store).ingest(
+                TextSource("audit cli", locator="urn:audit:cli")
+            )
+            (root / result.raw_artifact.storage_locator).write_bytes(
+                b"corrupt"
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(["--store", str(root), "audit-records"])
+
+            payload = json.loads(output.getvalue())
+            self.assertEqual(code, 2)
+            self.assertEqual(payload["schema"], "INGEST_RECORD_AUDIT_V1")
+            self.assertEqual(payload["status"], "CORRUPT")
+            self.assertEqual(payload["records_corrupt"], 1)
+
     def test_file_root_cli_accepts_relative_operator_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             previous = os.getcwd()
