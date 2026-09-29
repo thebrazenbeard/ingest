@@ -1,6 +1,6 @@
 # Streaming Acquisition V1
 
-Status: IMPLEMENTED FOR LOCAL-FILE RAW CAPTURE ON HARDENING LINE  
+Status: IMPLEMENTED FOR LOCAL-FILE, HTTP, AND DEFAULT-GITHUB RAW CAPTURE ON HARDENING LINE  
 Date: 2026-09-29
 
 ## Purpose
@@ -90,7 +90,6 @@ Artifact and ingest identity continue to derive from finalized evidence, not sch
 This implementation does not yet provide:
 
 - streaming HTTP response admission;
-- streaming GitHub file admission;
 - incremental text/JSON/JSONL normalization beyond the new streaming pre-sniff;
 - resumable partial uploads;
 - segmented/range manifests;
@@ -113,3 +112,28 @@ Those belong to later bounded changes.
 7. close the response on success or failure.
 
 The buffered `HttpAdapter.acquire()` remains for direct adapter callers and reuses the same response-establishment/provenance boundary. Ingestor prefers `acquire_stream()` when available.
+
+
+## GitHub streaming
+
+The default `GitHubApiTransport` supports `fetch_file_stream()`.
+
+The acquisition order is deliberate:
+
+1. resolve the caller's branch/tag/ref to an exact commit;
+2. request file/blob metadata at that commit;
+3. require a valid non-negative declared size;
+4. reject metadata sizes above `max_bytes` before raw transfer;
+5. bind the reported Git blob SHA;
+6. open the raw Git blob media response;
+7. initialize the Git object digest with `blob <size>\0`;
+8. stream bounded chunks, updating the Git digest before yielding each chunk;
+9. require exact observed size;
+10. require the recomputed Git object digest to equal the reported blob SHA;
+11. close the raw response on success or failure.
+
+The `Ingestor` uses this streaming path when the transport exposes it. Injected/custom transports that implement only the older `fetch_file()` contract continue to use the buffered fallback.
+
+Git commit identity, Git blob identity, Ingest artifact identity, and Ingest identity remain separate:
+
+`GIT_COMMIT != GIT_BLOB != ARTIFACT_ID != INGEST_ID`

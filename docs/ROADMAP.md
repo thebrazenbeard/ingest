@@ -50,6 +50,10 @@ Reuses raw source chunks for exact binary/text pre-classification and skips raw-
 
 Moves HTTP response bodies onto the streaming CAS path while retaining redirect, timeout, validated-address, final-destination, provenance, and cleanup controls.
 
+### PR #15 — streaming GitHub capture
+
+Moves the default GitHub transport onto metadata-preflight + raw-blob streaming while preserving exact-commit provenance and incremental Git object verification; custom non-streaming transports retain buffered fallback.
+
 ## Next implementation frontiers
 
 ### 1. Streaming media pre-sniff — implemented on hardening line
@@ -70,9 +74,9 @@ Any new normalizer version must be identity-visible.
 
 HTTP response bodies now stream through the CAS after requested/final URL validation and provenance binding while preserving address pinning, redirects, timeouts, hard byte ceilings, and response/temp cleanup.
 
-### 4. GitHub streaming/large object path
+### 4. GitHub streaming/large object path — implemented on hardening line
 
-Keep exact commit/blob binding. Avoid weakening Git object digest verification while introducing chunked transport.
+The default GitHub transport resolves mutable refs to exact commits, preflights blob size/identity metadata, streams raw blob bytes into CAS, recomputes Git object identity incrementally, and retains buffered fallback for custom transports without streaming support.
 
 ### 5. Segmented and range-based sources
 

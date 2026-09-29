@@ -13,7 +13,7 @@ The core rule is simple:
 - inline text and bytes;
 - local files with optional absolute-root confinement (CLI `--root` values are resolved to absolute paths before policy construction); raw local-file capture streams descriptor-bound chunks directly into the content-addressed store instead of first constructing one in-memory `bytes` payload;
 - HTTP(S) resources with bounded streaming body capture, redirects, timeouts, validated-address connection pinning, and private-network denial;
-- public/authenticated GitHub files through an injected transport, with mutable refs resolved to exact commits before acquisition and default-transport failures converted to governed acquisition failures;
+- public/authenticated GitHub files through an injected transport, with mutable refs resolved to exact commits before acquisition; the default transport preflights exact blob metadata, streams raw Git blob bytes into CAS, recomputes Git object identity incrementally, and converts transport failures into governed acquisition failures;
 - structured message/event envelopes where event time remains distinct from ingestion/observation time.
 
 JSON and JSONL are deterministically canonicalized. UTF-8 text is normalized to NFC and LF line endings without whitespace stripping. Opaque binary data is preserved raw without pretending to understand it.

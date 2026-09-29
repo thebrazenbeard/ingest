@@ -18,7 +18,7 @@ Persisted HTTP provenance strips URL userinfo, query, and fragment from the huma
 
 ## GitHub
 
-Mutable refs are resolved to exact commits before content acquisition. The default GitHub API transport converts network, HTTP, and invalid-JSON failures to bounded acquisition failures; it also recomputes the returned file's Git object digest and rejects a blob identity that does not match the acquired bytes. `.json`, `.jsonl`, and `.ndjson` are parser-driving from their path extensions even if the host MIME database disagrees. Credentials are constructor/transport state and are never persisted in provenance objects or receipts. Exact commit/blob identity is evidence of source selection, not proof that repository content is safe or true.
+Mutable refs are resolved to exact commits before content acquisition. The default GitHub API transport first reads file/blob metadata at that exact commit, validates the declared size against `max_bytes`, then opens the raw blob media path and streams bounded chunks into CAS. Git object identity is recomputed incrementally as `hash("blob <size>\\0" + exact bytes)` and must match the repository-reported blob SHA before the stream can finalize. Network, HTTP, invalid-JSON, raw-read, metadata-size, and blob-identity failures are normalized into governed acquisition failures. `.json`, `.jsonl`, and `.ndjson` are parser-driving from their path extensions even if the host MIME database disagrees. Credentials are constructor/transport state and are never persisted in provenance objects or receipts. Exact commit/blob identity is evidence of source selection, not proof that repository content is safe or true.
 
 ## Structured parsing
 
@@ -37,5 +37,7 @@ V1 stores bounded structured errors, not tracebacks. Adapters must not place aut
 
 Local-file **raw capture** is streaming in the current hardening line: source bytes flow from an opened descriptor into a fsynced temporary CAS object with incremental SHA-256 and a hard byte ceiling before create-only publication. This does not yet mean the entire pipeline is streaming. After raw publication, the current sniffing/normalization API is still byte-oriented and may materialize the verified raw artifact in memory. HTTP/GitHub adapters also remain buffered acquisition paths. The streaming source/store interfaces are deliberately separated so later adapters and normalizers can migrate without changing artifact identity or receipt semantics.
 
+
+GitHub streaming preserves the repository identity boundary ahead of raw admission: requested mutable refs resolve to exact commits first; metadata binds the expected blob SHA and byte length; only then are raw blob bytes consumed. Custom GitHub transports that do not expose `fetch_file_stream()` retain the existing buffered fallback contract.
 
 HTTP streaming keeps the connection/security boundary ahead of content admission: the adapter opens the response, validates the final URL under the same private-network policy, binds secret-safe URL provenance, and only then yields response chunks. The streaming generator owns response cleanup on success, over-limit rejection, and read failure. Injected custom response objects remain compatible when they expose either `close()` or context-manager `__exit__` cleanup.

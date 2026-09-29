@@ -157,7 +157,7 @@ No derivative is created in V1 unless a registered future parser explicitly owns
 
 `QUARANTINED` means raw bytes were safely stored but structured interpretation is unsafe or invalid, such as a file claiming JSON that does not parse as JSON.
 
-`FAILED` means acquisition or internal execution could not establish a reliable admitted result. Default GitHub API network, HTTP, and invalid-JSON transport failures are normalized into this governed failure path rather than escaping as raw transport exceptions.
+`FAILED` means acquisition or internal execution could not establish a reliable admitted result. Default GitHub API network, HTTP, invalid-JSON, raw-stream read, metadata-size, and blob-identity failures are normalized into this governed failure path rather than escaping as raw transport exceptions.
 
 `PARTIAL` is reserved for future optional derivations where the raw/core record remains safe but nonessential processing is incomplete.
 
@@ -165,7 +165,7 @@ A repeated observation does not promote the disposition of the existing record: 
 
 ## GitHub provenance
 
-A requested branch or tag is a mutable acquisition hint. The GitHub adapter resolves it to an exact commit before reading file content, and `SourceRef.source_identity` binds owner, repository, exact commit, and path. The default API transport recomputes the returned file's Git object digest and rejects a reported blob identity that does not match the acquired bytes. The originally requested ref remains claimed metadata. When the transport does not supply a media type, `.json`, `.jsonl`, and `.ndjson` are assigned deterministic parser-driving media types before any host MIME lookup; other extensions may still use the platform MIME database as a best-effort descriptive hint. Invalid structured files therefore do not silently degrade into plain text because a host MIME table disagrees.
+A requested branch or tag is a mutable acquisition hint. The GitHub adapter resolves it to an exact commit before reading file content, and `SourceRef.source_identity` binds owner, repository, exact commit, and path. The default API transport preflights file/blob metadata at the exact commit, rejects declared oversize content before opening the raw blob, then streams the raw Git blob while recomputing the Git object digest incrementally. A reported blob identity that does not match exact acquired bytes fails before streaming admission can finalize. The originally requested ref remains claimed metadata. When the transport does not supply a media type, `.json`, `.jsonl`, and `.ndjson` are assigned deterministic parser-driving media types before any host MIME lookup; other extensions may still use the platform MIME database as a best-effort descriptive hint. Invalid structured files therefore do not silently degrade into plain text because a host MIME table disagrees.
 
 Credential material belongs to the transport object, not the source record, receipt, locator, or artifact.
 
