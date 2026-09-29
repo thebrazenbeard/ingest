@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ingest import Ingestor, TextSource
@@ -168,6 +169,157 @@ class StorageDurabilityTests(unittest.TestCase):
 
             with self.assertRaises(StoreIntegrityError):
                 store.get_record(result.ingest_id)
+
+    def test_put_blob_stream_publishes_exact_bytes_and_dedupes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            chunks = [b"alpha", b"", b"beta", b"gamma"]
+            expected = b"alphabetagamma"
+
+            artifact, created = store.put_blob_stream(
+                iter(chunks),
+                media_type="application/octet-stream",
+                kind="raw",
+                max_bytes=1024,
+            )
+
+            self.assertTrue(created)
+            self.assertEqual(artifact.size_bytes, len(expected))
+            self.assertEqual(
+                artifact.sha256,
+                hashlib.sha256(expected).hexdigest(),
+            )
+            self.assertEqual(
+                (store.root / artifact.storage_locator).read_bytes(),
+                expected,
+            )
+
+            repeated, created = store.put_blob_stream(
+                (chunk for chunk in chunks),
+                media_type="application/octet-stream",
+                kind="raw",
+                max_bytes=1024,
+            )
+
+            self.assertFalse(created)
+            self.assertEqual(repeated.artifact_id, artifact.artifact_id)
+
+    def test_put_blob_stream_rejects_over_limit_and_cleans_temp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            store = FileSystemStore(root)
+
+            with self.assertRaises(ValueError):
+                store.put_blob_stream(
+                    [b"abc", b"def"],
+                    media_type="application/octet-stream",
+                    kind="raw",
+                    max_bytes=5,
+                )
+
+            blob_root = root / "blobs"
+            remaining_files = (
+                []
+                if not blob_root.exists()
+                else [
+                    path
+                    for path in blob_root.rglob("*")
+                    if path.is_file()
+                ]
+            )
+            self.assertEqual(remaining_files, [])
+
+    def test_repeated_blob_publication_ignores_ctime_only_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            data = b"stable-content"
+            artifact, created = store.put_blob(
+                data,
+                media_type="application/octet-stream",
+                kind="raw",
+            )
+            self.assertTrue(created)
+            real_fstat = os.fstat
+            calls = 0
+
+            def drift_ctime(fd):
+                nonlocal calls
+                value = real_fstat(fd)
+                calls += 1
+                return SimpleNamespace(
+                    st_dev=value.st_dev,
+                    st_ino=value.st_ino,
+                    st_size=value.st_size,
+                    st_mtime_ns=value.st_mtime_ns,
+                    st_ctime_ns=value.st_ctime_ns + calls,
+                )
+
+            with patch(
+                "ingest.storage.os.fstat",
+                side_effect=drift_ctime,
+            ):
+                repeated, created = store.put_blob(
+                    data,
+                    media_type="application/octet-stream",
+                    kind="raw",
+                )
+
+            self.assertFalse(created)
+            self.assertEqual(repeated.artifact_id, artifact.artifact_id)
+
+    def test_repeated_blob_publication_does_not_materialize_existing_blob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            data = b"x" * (256 * 1024)
+            artifact, created = store.put_blob(
+                data,
+                media_type="application/octet-stream",
+                kind="raw",
+            )
+            self.assertTrue(created)
+            blob_path = store.root / artifact.storage_locator
+            original_read_bytes = Path.read_bytes
+
+            def reject_blob_read_bytes(path):
+                if path == blob_path:
+                    raise AssertionError(
+                        "immutable collision check materialized existing blob"
+                    )
+                return original_read_bytes(path)
+
+            with patch.object(Path, "read_bytes", reject_blob_read_bytes):
+                repeated, created = store.put_blob(
+                    data,
+                    media_type="application/octet-stream",
+                    kind="raw",
+                )
+
+            self.assertFalse(created)
+            self.assertEqual(repeated.artifact_id, artifact.artifact_id)
+
+    def test_record_verification_hashes_artifacts_without_materializing_blob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            result = Ingestor(store).ingest(
+                TextSource("x" * (256 * 1024), locator="urn:stream-verify")
+            )
+            original_read = store._read_managed_bytes
+
+            def reject_blob_materialization(path, *, expected_size=None):
+                if "blobs" in Path(path).parts:
+                    raise AssertionError(
+                        "artifact verification materialized blob bytes"
+                    )
+                return original_read(path, expected_size=expected_size)
+
+            with patch.object(
+                store,
+                "_read_managed_bytes",
+                side_effect=reject_blob_materialization,
+            ):
+                record = store.get_record(result.ingest_id)
+
+            self.assertEqual(record["ingest_id"], result.ingest_id)
 
     def test_artifact_size_mismatch_is_rejected_before_blob_read(self):
         with tempfile.TemporaryDirectory() as tmp:
