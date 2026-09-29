@@ -4,6 +4,18 @@ Updated: 2026-09-29
 
 This roadmap records engineering frontiers, not promises of installed/runtime behavior.
 
+## Current open integration stack
+
+The active Draft chain as of 2026-09-29 is:
+
+`#16 integration hardening -> #17 store audit -> #18 audit schemas -> #19 JSONL streaming normalization -> #20 derived-stream boundary -> #21 caller-provided StreamSource`
+
+All six PRs are Draft, mergeable, and green at the exact heads recorded in `docs/continuation/INGEST_CONTINUATION_2026-09-29.md`.
+
+PRs #10, #12, and #15 were closed as superseded after their surviving changes were consolidated into #16.
+
+The latest verified code tip before the continuation-doc commit ran 105 tests: 104 passed and one Windows-only POSIX directory-fsync probe was skipped as expected.
+
 ## Landed on current main
 
 - provider-neutral V1 intake core;
