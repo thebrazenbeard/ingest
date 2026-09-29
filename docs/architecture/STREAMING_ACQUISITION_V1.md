@@ -99,3 +99,17 @@ This implementation does not yet provide:
 - cryptographic authenticity against a writer able to coherently rewrite the entire store.
 
 Those belong to later bounded changes.
+
+## HTTP streaming
+
+`HttpAdapter.acquire_stream()` now uses the same streaming CAS path. The adapter deliberately separates response establishment from response-body consumption:
+
+1. validate requested URL/scheme/network policy;
+2. resolve and pin the default transport connection to validated addresses;
+3. apply bounded redirect policy;
+4. validate the returned final URL before reading its body;
+5. bind secret-safe requested/final URL provenance;
+6. yield bounded response chunks;
+7. close the response on success or failure.
+
+The buffered `HttpAdapter.acquire()` remains for direct adapter callers and reuses the same response-establishment/provenance boundary. Ingestor prefers `acquire_stream()` when available.
