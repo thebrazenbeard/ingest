@@ -385,6 +385,119 @@ class FileSystemStore:
             expected_sha256=digest,
         )
 
+    def put_blob_stream(
+        self,
+        chunks,
+        *,
+        media_type: str,
+        kind: str,
+        max_bytes: int,
+    ) -> tuple[Artifact, bool]:
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be positive")
+
+        staging_dir = self.root / "blobs" / "sha256"
+        self._ensure_directory_chain(staging_dir)
+        self._assert_no_managed_links(staging_dir)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=".tmp-",
+            dir=staging_dir,
+        )
+        temp_path = Path(temp_name)
+        digest = hashlib.sha256()
+        size_bytes = 0
+
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                for chunk in chunks:
+                    if not isinstance(
+                        chunk,
+                        (bytes, bytearray, memoryview),
+                    ):
+                        raise TypeError(
+                            "stream chunks must be bytes-like"
+                        )
+                    if not chunk:
+                        continue
+                    data = bytes(chunk)
+                    next_size = size_bytes + len(data)
+                    if next_size > max_bytes:
+                        raise ValueError(
+                            f"stream exceeds max_bytes={max_bytes}"
+                        )
+                    handle.write(data)
+                    digest.update(data)
+                    size_bytes = next_size
+
+                handle.flush()
+                os.fsync(handle.fileno())
+
+            hex_digest = digest.hexdigest()
+            relative = (
+                Path("blobs")
+                / "sha256"
+                / hex_digest[:2]
+                / hex_digest
+            )
+            final_path = self.root / relative
+            self._ensure_directory_chain(final_path.parent)
+            self._assert_no_managed_links(final_path)
+
+            if final_path.exists():
+                try:
+                    self._verify_managed_sha256(
+                        final_path,
+                        expected_size=size_bytes,
+                        expected_sha256=hex_digest,
+                    )
+                except (
+                    FileNotFoundError,
+                    StoreIntegrityError,
+                ) as exc:
+                    raise StoreConflict(
+                        f"immutable path collision: {final_path}"
+                    ) from exc
+                created = False
+            else:
+                try:
+                    os.link(temp_path, final_path)
+                except FileExistsError:
+                    self._assert_no_managed_links(final_path)
+                    try:
+                        self._verify_managed_sha256(
+                            final_path,
+                            expected_size=size_bytes,
+                            expected_sha256=hex_digest,
+                        )
+                    except (
+                        FileNotFoundError,
+                        StoreIntegrityError,
+                    ) as exc:
+                        raise StoreConflict(
+                            f"immutable path collision: {final_path}"
+                        ) from exc
+                    created = False
+                else:
+                    self._fsync_directory(final_path.parent)
+                    created = True
+
+            return (
+                Artifact(
+                    artifact_id=f"sha256:{hex_digest}",
+                    sha256=hex_digest,
+                    size_bytes=size_bytes,
+                    media_type=media_type,
+                    kind=kind,
+                    storage_locator=relative.as_posix(),
+                ),
+                created,
+            )
+        finally:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
     def put_blob(self, data: bytes, *, media_type: str, kind: str) -> tuple[Artifact, bool]:
         digest = sha256_bytes(data)
         relative = Path("blobs") / "sha256" / digest[:2] / digest
