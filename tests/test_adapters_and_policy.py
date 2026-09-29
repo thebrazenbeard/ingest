@@ -27,6 +27,37 @@ class FakeGitHubTransport:
         return b"hello from github\n", "text/plain", {"git_blob_sha": "b" * 40, "size": 18}
 
 
+class FakeStreamingGitHubTransport:
+    def resolve_ref(self, owner, repository, ref):
+        self.resolve_args = (owner, repository, ref)
+        return "a" * 40
+
+    def fetch_file_stream(
+        self,
+        owner,
+        repository,
+        commit,
+        path,
+        max_bytes,
+    ):
+        self.fetch_args = (
+            owner,
+            repository,
+            commit,
+            path,
+            max_bytes,
+        )
+        data = b"hello from streamed github\n"
+        return (
+            iter([data[:7], data[7:]]),
+            None,
+            {"git_blob_sha": "b" * 40, "size": len(data)},
+        )
+
+    def fetch_file(self, *_args, **_kwargs):
+        raise AssertionError("buffered GitHub fetch should not be used")
+
+
 class AdapterPolicyTests(unittest.TestCase):
     def test_parser_driving_media_type_is_part_of_ingest_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -196,6 +227,50 @@ class AdapterPolicyTests(unittest.TestCase):
             self.assertIsNotNone(result.normalized_artifact)
             normalized = (store.root / result.normalized_artifact.storage_locator).read_bytes()
             self.assertEqual(normalized, b'{"a":1,"b":2}\n{"z":0}\n')
+
+    def test_ingestor_streams_github_when_transport_supports_streaming(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            transport = FakeStreamingGitHubTransport()
+            adapter = GitHubAdapter(transport)
+            store = FileSystemStore(Path(tmp) / ".ingest")
+
+            with patch.object(
+                adapter,
+                "acquire",
+                side_effect=AssertionError(
+                    "buffered GitHubAdapter.acquire should not be used"
+                ),
+            ), patch.object(
+                store,
+                "put_blob_stream",
+                wraps=store.put_blob_stream,
+            ) as stream_put:
+                result = Ingestor(
+                    store,
+                    adapters=[adapter],
+                ).ingest(
+                    GitHubFileSource(
+                        "o",
+                        "r",
+                        "main",
+                        "README.md",
+                    )
+                )
+
+            self.assertEqual(result.status, IngestStatus.ACCEPTED)
+            stream_put.assert_called_once()
+            self.assertEqual(
+                result.source.source_identity["commit"],
+                "a" * 40,
+            )
+            self.assertEqual(
+                result.source.claimed_metadata["requested_ref"],
+                "main",
+            )
+            self.assertEqual(
+                (store.root / result.raw_artifact.storage_locator).read_bytes(),
+                b"hello from streamed github\n",
+            )
 
     def test_github_ref_is_resolved_to_exact_commit_in_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:
