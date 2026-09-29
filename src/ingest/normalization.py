@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import codecs
+from collections.abc import Iterable, Iterator
 import json
 import unicodedata
 
@@ -56,6 +57,111 @@ class StreamingMediaSniffer:
         return "text/plain"
 
 
+_JSONL_LINE_BREAKS = frozenset(
+    ("\n", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")
+)
+
+
+def _take_complete_jsonl_lines(
+    buffer: str,
+    *,
+    final: bool,
+) -> tuple[list[str], str]:
+    lines: list[str] = []
+    start = 0
+    index = 0
+    while index < len(buffer):
+        value = buffer[index]
+        if value == "\r":
+            if index + 1 == len(buffer) and not final:
+                break
+            end = (
+                index + 2
+                if index + 1 < len(buffer) and buffer[index + 1] == "\n"
+                else index + 1
+            )
+            lines.append(buffer[start:index])
+            start = end
+            index = end
+            continue
+        if value in _JSONL_LINE_BREAKS:
+            lines.append(buffer[start:index])
+            start = index + 1
+        index += 1
+
+    remainder = buffer[start:]
+    if final and remainder:
+        lines.append(remainder)
+        remainder = ""
+    return lines, remainder
+
+
+def _canonicalize_jsonl_line(line: str, line_number: int) -> bytes | None:
+    if not line.strip():
+        return None
+    try:
+        value = json.loads(line)
+        return (canonical_json(value) + "\n").encode("utf-8")
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise NormalizationError(
+            f"invalid JSONL line {line_number}: {exc}"
+        ) from exc
+
+
+def normalize_jsonl_stream(chunks: Iterable[bytes]) -> Iterator[bytes]:
+    decoder = codecs.getincrementaldecoder("utf-8")("strict")
+    buffer = ""
+    line_number = 0
+    first_json_error: NormalizationError | None = None
+    utf8_error = False
+
+    def process(lines: list[str]) -> Iterator[bytes]:
+        nonlocal line_number, first_json_error
+        for line in lines:
+            line_number += 1
+            if first_json_error is not None:
+                continue
+            try:
+                normalized = _canonicalize_jsonl_line(line, line_number)
+            except NormalizationError as exc:
+                first_json_error = exc
+                continue
+            if normalized is not None:
+                yield normalized
+
+    for chunk in chunks:
+        if not isinstance(chunk, (bytes, bytearray, memoryview)):
+            raise TypeError("JSONL stream chunks must be bytes-like")
+        if utf8_error:
+            continue
+        try:
+            buffer += decoder.decode(bytes(chunk), final=False)
+        except UnicodeDecodeError:
+            utf8_error = True
+            continue
+        lines, buffer = _take_complete_jsonl_lines(
+            buffer,
+            final=False,
+        )
+        yield from process(lines)
+
+    if not utf8_error:
+        try:
+            buffer += decoder.decode(b"", final=True)
+        except UnicodeDecodeError:
+            utf8_error = True
+
+    if utf8_error:
+        raise NormalizationError("JSONL is not valid UTF-8")
+
+    lines, buffer = _take_complete_jsonl_lines(buffer, final=True)
+    yield from process(lines)
+    if buffer:
+        raise AssertionError("streaming JSONL line buffer was not drained")
+    if first_json_error is not None:
+        raise first_json_error
+
+
 def sniff_media_type(data: bytes) -> str:
     stripped = data.lstrip()
     if stripped.startswith((b"{", b"[")):
@@ -83,20 +189,7 @@ def normalize_bytes(data: bytes, media_type: str) -> bytes | None:
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
             raise NormalizationError(f"invalid JSON: {exc}") from exc
     if media_type in {"application/x-ndjson", "application/jsonl"}:
-        lines: list[str] = []
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise NormalizationError("JSONL is not valid UTF-8") from exc
-        for index, line in enumerate(text.splitlines(), start=1):
-            if not line.strip():
-                continue
-            try:
-                value = json.loads(line)
-                lines.append(canonical_json(value))
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                raise NormalizationError(f"invalid JSONL line {index}: {exc}") from exc
-        return (("\n".join(lines) + "\n") if lines else "").encode("utf-8")
+        return b"".join(normalize_jsonl_stream((data,)))
     if media_type.startswith("text/"):
         try:
             text = data.decode("utf-8")

@@ -267,6 +267,37 @@ class StorageDurabilityTests(unittest.TestCase):
             self.assertFalse(created)
             self.assertEqual(repeated.artifact_id, artifact.artifact_id)
 
+    def test_iter_blob_chunks_verifies_exact_published_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            data = b"abcdefghijklmnopqrstuvwxyz"
+            artifact, _created = store.put_blob(
+                data,
+                media_type="application/octet-stream",
+                kind="raw",
+            )
+
+            chunks = list(store.iter_blob_chunks(artifact, chunk_size=5))
+
+            self.assertEqual(b"".join(chunks), data)
+            self.assertTrue(all(0 < len(chunk) <= 5 for chunk in chunks))
+
+            (store.root / artifact.storage_locator).write_bytes(b"corrupted")
+            with self.assertRaises(StoreIntegrityError):
+                b"".join(store.iter_blob_chunks(artifact, chunk_size=5))
+
+    def test_iter_blob_chunks_rejects_invalid_chunk_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            artifact, _created = store.put_blob(
+                b"x",
+                media_type="application/octet-stream",
+                kind="raw",
+            )
+
+            with self.assertRaises(ValueError):
+                list(store.iter_blob_chunks(artifact, chunk_size=0))
+
     def test_repeated_blob_publication_does_not_materialize_existing_blob(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FileSystemStore(Path(tmp) / ".ingest")

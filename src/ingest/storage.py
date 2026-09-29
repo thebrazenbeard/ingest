@@ -395,6 +395,35 @@ class FileSystemStore:
     ) -> tuple[Artifact, bool]:
         if max_bytes <= 0:
             raise ValueError("max_bytes must be positive")
+        return self._put_blob_stream(
+            chunks,
+            media_type=media_type,
+            kind=kind,
+            max_bytes=max_bytes,
+        )
+
+    def put_derived_blob_stream(
+        self,
+        chunks,
+        *,
+        media_type: str,
+        kind: str = "normalized",
+    ) -> tuple[Artifact, bool]:
+        return self._put_blob_stream(
+            chunks,
+            media_type=media_type,
+            kind=kind,
+            max_bytes=None,
+        )
+
+    def _put_blob_stream(
+        self,
+        chunks,
+        *,
+        media_type: str,
+        kind: str,
+        max_bytes: int | None,
+    ) -> tuple[Artifact, bool]:
 
         staging_dir = self.root / "blobs" / "sha256"
         self._ensure_directory_chain(staging_dir)
@@ -421,7 +450,10 @@ class FileSystemStore:
                         continue
                     data = bytes(chunk)
                     next_size = size_bytes + len(data)
-                    if next_size > max_bytes:
+                    if (
+                        max_bytes is not None
+                        and next_size > max_bytes
+                    ):
                         raise ValueError(
                             f"stream exceeds max_bytes={max_bytes}"
                         )
@@ -497,6 +529,93 @@ class FileSystemStore:
                 temp_path.unlink()
             except FileNotFoundError:
                 pass
+
+    def iter_blob_chunks(
+        self,
+        artifact: Artifact,
+        *,
+        chunk_size: int = 64 * 1024,
+    ):
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+
+        digest = artifact.sha256
+        if (
+            len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise StoreIntegrityError("artifact sha256 is invalid")
+        expected_id = f"sha256:{digest}"
+        expected_locator = (
+            Path("blobs") / "sha256" / digest[:2] / digest
+        ).as_posix()
+        if artifact.artifact_id != expected_id:
+            raise StoreIntegrityError("artifact id does not match sha256")
+        if artifact.storage_locator != expected_locator:
+            raise StoreIntegrityError(
+                "artifact storage locator does not match sha256"
+            )
+        if (
+            not isinstance(artifact.size_bytes, int)
+            or isinstance(artifact.size_bytes, bool)
+            or artifact.size_bytes < 0
+        ):
+            raise StoreIntegrityError("artifact size_bytes is invalid")
+
+        path = self.root / expected_locator
+        self._assert_no_managed_links(path)
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags)
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise StoreIntegrityError("managed storage read failed") from exc
+
+        try:
+            opened = os.fstat(fd)
+            if opened.st_size != artifact.size_bytes:
+                raise StoreIntegrityError(
+                    "managed storage object size differs before read"
+                )
+
+            observed_size = 0
+            observed_digest = hashlib.sha256()
+            while True:
+                chunk = os.read(fd, chunk_size)
+                if not chunk:
+                    break
+                observed_size += len(chunk)
+                if observed_size > artifact.size_bytes:
+                    raise StoreIntegrityError(
+                        "managed storage object grew during verification"
+                    )
+                observed_digest.update(chunk)
+                yield chunk
+
+            final = os.fstat(fd)
+            if (
+                self._content_read_signature(final)
+                != self._content_read_signature(opened)
+            ):
+                raise StoreIntegrityError(
+                    "managed storage object changed during read"
+                )
+            if observed_size != opened.st_size:
+                raise StoreIntegrityError(
+                    "managed storage object size changed during read"
+                )
+            if observed_digest.hexdigest() != digest:
+                raise StoreIntegrityError(
+                    "artifact digest does not match bytes"
+                )
+        except StoreIntegrityError:
+            raise
+        except OSError as exc:
+            raise StoreIntegrityError("managed storage read failed") from exc
+        finally:
+            os.close(fd)
 
     def read_blob_bytes(self, artifact: Artifact) -> bytes:
         digest = artifact.sha256

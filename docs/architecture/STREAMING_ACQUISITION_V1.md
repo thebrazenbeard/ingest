@@ -50,7 +50,7 @@ For local files, raw capture is now:
 
 `file descriptor -> bounded chunks -> fsynced staging -> SHA-256 CAS publication`
 
-The pipeline then opens the persisted raw artifact through the store when the existing V1 content sniffer/normalizer needs a byte payload.
+The pipeline may then open the persisted raw artifact when the generic V1 content sniffer needs a byte payload. JSONL/NDJSON normalization itself no longer requires whole-artifact materialization: it reopens the verified raw CAS object as bounded chunks and streams canonical output into derived CAS publication.
 
 Therefore:
 
@@ -61,7 +61,7 @@ Current byte materialization can still occur after raw publication for:
 - media sniffing;
 - UTF-8 normalization;
 - JSON canonicalization;
-- JSONL canonicalization.
+- JSONL media classification when the generic JSON-aware sniffer requires exact whole-payload classification; the JSONL normalization transform itself is streaming.
 
 Streamed local-file capture now performs an incremental UTF-8/NUL/leading-token pre-sniff while bytes are already flowing into CAS. Definitive opaque/text classification therefore avoids a second raw-blob read when downstream normalization is not needed. JSON-looking streams remain conservative: if the first non-whitespace byte is `{` or `[`, the persisted raw artifact is materialized and passed through the original full JSON-aware sniffer so classification semantics do not change.
 
@@ -89,8 +89,7 @@ Artifact and ingest identity continue to derive from finalized evidence, not sch
 
 This implementation does not yet provide:
 
-- streaming HTTP response admission;
-- incremental text/JSON/JSONL normalization beyond the new streaming pre-sniff;
+- incremental general text and monolithic JSON normalization beyond the streaming pre-sniff;
 - resumable partial uploads;
 - segmented/range manifests;
 - orphan-object auditing;
