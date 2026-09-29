@@ -128,6 +128,54 @@ class AdapterPolicyTests(unittest.TestCase):
             )
             self.assertEqual(blob_files, [])
 
+    def test_opaque_streamed_file_skips_post_capture_blob_materialization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "opaque.bin"
+            path.write_bytes(b"plain utf8 bytes in a binary-named file")
+            store = FileSystemStore(Path(tmp) / ".ingest")
+
+            with patch.object(
+                store,
+                "read_blob_bytes",
+                side_effect=AssertionError(
+                    "opaque streamed file should not be materialized"
+                ),
+            ):
+                result = Ingestor(
+                    store,
+                    adapters=[FileAdapter()],
+                ).ingest(FileSource(str(path)))
+
+            self.assertEqual(result.status, IngestStatus.ACCEPTED)
+            self.assertIsNone(result.normalized_artifact)
+            self.assertEqual(result.raw_artifact.media_type, "text/plain")
+            self.assertIn(
+                "media_type_mismatch: "
+                "claimed=application/octet-stream sniffed=text/plain",
+                result.warnings,
+            )
+
+    def test_json_candidate_stream_still_materializes_for_exact_classification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "candidate.bin"
+            path.write_bytes(b'{"a":1}')
+            store = FileSystemStore(Path(tmp) / ".ingest")
+
+            with patch.object(
+                store,
+                "read_blob_bytes",
+                wraps=store.read_blob_bytes,
+            ) as read_blob:
+                result = Ingestor(
+                    store,
+                    adapters=[FileAdapter()],
+                ).ingest(FileSource(str(path)))
+
+            self.assertEqual(result.status, IngestStatus.ACCEPTED)
+            self.assertEqual(result.raw_artifact.media_type, "application/json")
+            self.assertIsNone(result.normalized_artifact)
+            self.assertGreaterEqual(read_blob.call_count, 1)
+
     def test_invalid_json_file_is_quarantined_but_raw_is_preserved(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bad.json"
