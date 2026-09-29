@@ -169,6 +169,65 @@ class StorageDurabilityTests(unittest.TestCase):
             with self.assertRaises(StoreIntegrityError):
                 store.get_record(result.ingest_id)
 
+    def test_put_blob_stream_publishes_exact_bytes_and_dedupes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            chunks = [b"alpha", b"", b"beta", b"gamma"]
+            expected = b"alphabetagamma"
+
+            artifact, created = store.put_blob_stream(
+                iter(chunks),
+                media_type="application/octet-stream",
+                kind="raw",
+                max_bytes=1024,
+            )
+
+            self.assertTrue(created)
+            self.assertEqual(artifact.size_bytes, len(expected))
+            self.assertEqual(
+                artifact.sha256,
+                hashlib.sha256(expected).hexdigest(),
+            )
+            self.assertEqual(
+                (store.root / artifact.storage_locator).read_bytes(),
+                expected,
+            )
+
+            repeated, created = store.put_blob_stream(
+                (chunk for chunk in chunks),
+                media_type="application/octet-stream",
+                kind="raw",
+                max_bytes=1024,
+            )
+
+            self.assertFalse(created)
+            self.assertEqual(repeated.artifact_id, artifact.artifact_id)
+
+    def test_put_blob_stream_rejects_over_limit_and_cleans_temp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            store = FileSystemStore(root)
+
+            with self.assertRaises(ValueError):
+                store.put_blob_stream(
+                    [b"abc", b"def"],
+                    media_type="application/octet-stream",
+                    kind="raw",
+                    max_bytes=5,
+                )
+
+            blob_root = root / "blobs"
+            remaining_files = (
+                []
+                if not blob_root.exists()
+                else [
+                    path
+                    for path in blob_root.rglob("*")
+                    if path.is_file()
+                ]
+            )
+            self.assertEqual(remaining_files, [])
+
     def test_repeated_blob_publication_does_not_materialize_existing_blob(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FileSystemStore(Path(tmp) / ".ingest")
