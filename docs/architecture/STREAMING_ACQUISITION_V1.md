@@ -63,7 +63,7 @@ Current byte materialization can still occur after raw publication for:
 - JSON canonicalization;
 - JSONL canonicalization.
 
-Opaque binary data creates no normalized derivative, but the present sniffer can still require byte-oriented inspection. Eliminating that readback without changing classification semantics is separate work.
+Streamed local-file capture now performs an incremental UTF-8/NUL/leading-token pre-sniff while bytes are already flowing into CAS. Definitive opaque/text classification therefore avoids a second raw-blob read when downstream normalization is not needed. JSON-looking streams remain conservative: if the first non-whitespace byte is `{` or `[`, the persisted raw artifact is materialized and passed through the original full JSON-aware sniffer so classification semantics do not change.
 
 ## Failure semantics
 
@@ -91,7 +91,7 @@ This implementation does not yet provide:
 
 - streaming HTTP response admission;
 - streaming GitHub file admission;
-- incremental text/JSON/JSONL normalization;
+- incremental text/JSON/JSONL normalization beyond the new streaming pre-sniff;
 - resumable partial uploads;
 - segmented/range manifests;
 - orphan-object auditing;

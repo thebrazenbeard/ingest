@@ -42,13 +42,15 @@ Bounded chunked write, incremental SHA-256, fsynced staging, create-only CAS pub
 
 Local files use descriptor-bound streaming raw capture into CAS. Existing normalizers remain byte-oriented after raw admission.
 
+### PR #13 — streaming media pre-sniff
+
+Reuses raw source chunks for exact binary/text pre-classification and skips raw-blob readback when parser-driving semantics are opaque; JSON-looking streams retain full byte classification.
+
 ## Next implementation frontiers
 
-### 1. Remove unnecessary post-capture blob materialization
+### 1. Streaming media pre-sniff — implemented on hardening line
 
-Preserve current media-type semantics while avoiding full raw readback for sources that are provably opaque or can be sniffed incrementally.
-
-Do not silently change classification/dedup semantics merely to save memory.
+Local-file chunks now feed an incremental UTF-8/NUL/leading-token sniffer during raw CAS publication. Definitive opaque/non-normalized inputs can avoid post-capture blob materialization. JSON-looking content still falls back to the original full byte sniffer so semantics remain stable.
 
 ### 2. Incremental normalization
 
