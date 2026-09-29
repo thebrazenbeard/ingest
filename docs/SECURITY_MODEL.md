@@ -10,7 +10,7 @@ Configured `allowed_roots` must be absolute paths and are resolved before use. T
 
 ## HTTP(S)
 
-HTTPS is the default. Plain HTTP requires `allow_http=True`. Each requested/redirect URL is policy-checked, redirect count is bounded, reads are capped at `max_bytes + 1`, and a timeout is mandatory. A returned final URL is checked before its response body is consumed. Private, loopback, link-local, multicast, reserved, and unspecified destinations are denied by default.
+HTTPS is the default. Plain HTTP requires `allow_http=True`. Each requested/redirect URL is policy-checked, redirect count is bounded, body streaming is capped by `max_bytes`, and a timeout is mandatory. A returned final URL is checked and provenance-bound before its response body is consumed. Private, loopback, link-local, multicast, reserved, and unspecified destinations are denied by default.
 
 The default stdlib V1 transport resolves each destination, rejects forbidden answers under policy, and connects directly to a validated IP instead of handing the hostname back to the socket layer for a second resolution. HTTPS still uses the original hostname for TLS certificate verification. This binds the default connection to the address set that actually passed policy validation. If a caller injects a custom opener, requested/final URLs are still policy-checked, but connection binding becomes that opener's responsibility.
 
@@ -36,3 +36,6 @@ V1 stores bounded structured errors, not tracebacks. Adapters must not place aut
 ## Streaming claim boundary
 
 Local-file **raw capture** is streaming in the current hardening line: source bytes flow from an opened descriptor into a fsynced temporary CAS object with incremental SHA-256 and a hard byte ceiling before create-only publication. This does not yet mean the entire pipeline is streaming. After raw publication, the current sniffing/normalization API is still byte-oriented and may materialize the verified raw artifact in memory. HTTP/GitHub adapters also remain buffered acquisition paths. The streaming source/store interfaces are deliberately separated so later adapters and normalizers can migrate without changing artifact identity or receipt semantics.
+
+
+HTTP streaming keeps the connection/security boundary ahead of content admission: the adapter opens the response, validates the final URL under the same private-network policy, binds secret-safe URL provenance, and only then yields response chunks. The streaming generator owns response cleanup on success, over-limit rejection, and read failure. Injected custom response objects remain compatible when they expose either `close()` or context-manager `__exit__` cleanup.
