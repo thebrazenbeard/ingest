@@ -5,6 +5,7 @@ from .model import (
     IngestResult,
     IngestStatus,
     MessageSource,
+    StreamingAcquisition,
     TextSource,
     UrlSource,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "IngestStatus",
     "Ingestor",
     "MessageSource",
+    "StreamingAcquisition",
     "TextSource",
     "UrlSource",
 ]
