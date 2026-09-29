@@ -1,6 +1,8 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ingest import (
     BytesSource,
@@ -48,6 +50,83 @@ class AdapterPolicyTests(unittest.TestCase):
             )
             self.assertEqual(result.status, IngestStatus.REJECTED)
             self.assertIn("outside allowed_roots", result.error)
+
+    def test_ingestor_streams_file_capture_instead_of_buffered_adapter_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "streamed.txt"
+            path.write_text("hello\r\nworld", encoding="utf-8")
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            adapter = FileAdapter()
+
+            with patch.object(
+                adapter,
+                "acquire",
+                side_effect=AssertionError(
+                    "buffered FileAdapter.acquire should not be used"
+                ),
+            ), patch.object(
+                store,
+                "put_blob_stream",
+                wraps=store.put_blob_stream,
+            ) as stream_put:
+                result = Ingestor(
+                    store,
+                    adapters=[adapter],
+                ).ingest(FileSource(str(path)))
+
+            self.assertEqual(result.status, IngestStatus.ACCEPTED)
+            stream_put.assert_called_once()
+            self.assertEqual(
+                (store.root / result.raw_artifact.storage_locator).read_bytes(),
+                b"hello\r\nworld",
+            )
+
+    def test_streaming_file_change_during_capture_is_failed_without_raw_blob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "changing.bin"
+            path.write_bytes(b"a" * (128 * 1024))
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            adapter = FileAdapter()
+            original_read = os.read
+            original_stat = path.stat()
+            changed = False
+
+            def read_then_touch(fd, size):
+                nonlocal changed
+                chunk = original_read(fd, size)
+                if chunk and not changed:
+                    changed = True
+                    os.utime(
+                        path,
+                        ns=(
+                            original_stat.st_atime_ns,
+                            original_stat.st_mtime_ns + 1_000_000_000,
+                        ),
+                    )
+                return chunk
+
+            with patch(
+                "ingest.adapters.file.os.read",
+                side_effect=read_then_touch,
+            ):
+                result = Ingestor(
+                    store,
+                    adapters=[adapter],
+                ).ingest(FileSource(str(path)))
+
+            self.assertEqual(result.status, IngestStatus.FAILED)
+            self.assertIn("changed during acquisition", result.error)
+            blob_root = store.root / "blobs"
+            blob_files = (
+                []
+                if not blob_root.exists()
+                else [
+                    item
+                    for item in blob_root.rglob("*")
+                    if item.is_file()
+                ]
+            )
+            self.assertEqual(blob_files, [])
 
     def test_invalid_json_file_is_quarantined_but_raw_is_preserved(self):
         with tempfile.TemporaryDirectory() as tmp:
