@@ -21,6 +21,7 @@ from .normalization import (
     NormalizationError,
     StreamingMediaSniffer,
     normalize_bytes,
+    normalize_jsonl_stream,
     sniff_media_type,
 )
 from .policy import IngestPolicy
@@ -197,22 +198,27 @@ class Ingestor:
                         claimed in {"application/json", "text/json"}
                         and sniffed != "application/json"
                     )
+                    stream_normalize_jsonl = claimed in {
+                        "application/x-ndjson",
+                        "application/jsonl",
+                    }
                     normalization_needs_bytes = (
                         effective_media
                         in {
                             "application/json",
                             "text/json",
-                            "application/x-ndjson",
-                            "application/jsonl",
                         }
                         or effective_media.startswith("text/")
-                    )
+                    ) and not stream_normalize_jsonl
                     if (
                         not materialized
                         and normalization_needs_bytes
                         and not claimed_json_mismatch
                     ):
                         raw_bytes = self.store.read_blob_bytes(raw_artifact)
+
+                    if stream_normalize_jsonl:
+                        raw_bytes = b""
 
                     acquisition = Acquisition(
                         data=raw_bytes,
@@ -225,6 +231,7 @@ class Ingestor:
                         pre_persisted_raw=(raw_artifact, created),
                         precomputed_sniffed=sniffed,
                         observed_size=raw_artifact.size_bytes,
+                        stream_normalize_jsonl=stream_normalize_jsonl,
                     )
             acquisition = adapter.acquire(source, policy)
         except PolicyRejected as exc:
@@ -250,6 +257,7 @@ class Ingestor:
         pre_persisted_raw=None,
         precomputed_sniffed: str | None = None,
         observed_size: int | None = None,
+        stream_normalize_jsonl: bool = False,
     ) -> IngestResult:
         receipt_ids: list[str] = []
         warnings: list[str] = []
@@ -386,8 +394,24 @@ class Ingestor:
                 error=error,
             )
 
+        streamed_normalized_artifact = None
         try:
-            normalized_bytes = normalize_bytes(acquisition.data, effective_media)
+            if stream_normalize_jsonl:
+                streamed_normalized_artifact, _ = (
+                    self.store.put_derived_blob_stream(
+                        normalize_jsonl_stream(
+                            self.store.iter_blob_chunks(raw_artifact)
+                        ),
+                        media_type=effective_media,
+                        kind="normalized",
+                    )
+                )
+                normalized_bytes = None
+            else:
+                normalized_bytes = normalize_bytes(
+                    acquisition.data,
+                    effective_media,
+                )
         except NormalizationError as exc:
             receipt = self._receipt(
                 ingest_id=ingest_id,
@@ -430,12 +454,15 @@ class Ingestor:
                 error=str(exc),
             )
 
-        normalized_artifact = None
+        normalized_artifact = streamed_normalized_artifact
         derivation_ids: list[str] = []
-        if normalized_bytes is not None:
-            normalized_artifact, _ = self.store.put_blob(
-                normalized_bytes, media_type=effective_media, kind="normalized"
-            )
+        if normalized_artifact is not None or normalized_bytes is not None:
+            if normalized_artifact is None:
+                normalized_artifact, _ = self.store.put_blob(
+                    normalized_bytes,
+                    media_type=effective_media,
+                    kind="normalized",
+                )
             receipt = self._receipt(
                 ingest_id=ingest_id,
                 stage="normalize",

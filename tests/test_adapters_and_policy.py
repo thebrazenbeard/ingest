@@ -15,6 +15,7 @@ from ingest import (
     MessageSource,
 )
 from ingest.adapters import FileAdapter, GitHubAdapter, MessageAdapter, TextBytesAdapter
+from ingest.normalization import NormalizationError, normalize_bytes
 
 
 class FakeGitHubTransport:
@@ -216,6 +217,93 @@ class AdapterPolicyTests(unittest.TestCase):
             self.assertEqual(result.status, IngestStatus.QUARANTINED)
             self.assertIsNotNone(result.raw_artifact)
             self.assertTrue((store.root / result.raw_artifact.storage_locator).is_file())
+
+    def test_streamed_jsonl_uses_streaming_normalizer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "streamed.jsonl"
+            path.write_bytes(b'{"b":2,"a":1}\n{"z":0}\n')
+            store = FileSystemStore(Path(tmp) / ".ingest")
+
+            with patch(
+                "ingest.pipeline.normalize_bytes",
+                side_effect=AssertionError(
+                    "streamed JSONL should not use buffered normalize_bytes"
+                ),
+            ), patch.object(
+                store,
+                "put_blob_stream",
+                wraps=store.put_blob_stream,
+            ) as raw_stream_put, patch.object(
+                store,
+                "put_derived_blob_stream",
+                wraps=store.put_derived_blob_stream,
+            ) as derived_stream_put:
+                result = Ingestor(
+                    store,
+                    adapters=[FileAdapter()],
+                ).ingest(FileSource(str(path)))
+
+            self.assertEqual(result.status, IngestStatus.ACCEPTED)
+            self.assertIsNotNone(result.normalized_artifact)
+            self.assertEqual(raw_stream_put.call_count, 1)
+            derived_stream_put.assert_called_once()
+            normalized = (
+                store.root / result.normalized_artifact.storage_locator
+            ).read_bytes()
+            self.assertEqual(normalized, b'{"a":1,"b":2}\n{"z":0}\n')
+
+    def test_streamed_jsonl_preserves_valid_canonical_expansion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "expanded.jsonl"
+            raw = b"1e3\n"
+            path.write_bytes(raw)
+            store = FileSystemStore(Path(tmp) / ".ingest")
+
+            result = Ingestor(
+                store,
+                adapters=[FileAdapter()],
+            ).ingest(FileSource(str(path)))
+
+            self.assertEqual(result.status, IngestStatus.ACCEPTED)
+            normalized = (
+                store.root / result.normalized_artifact.storage_locator
+            ).read_bytes()
+            self.assertEqual(
+                normalized,
+                normalize_bytes(raw, "application/x-ndjson"),
+            )
+            self.assertGreater(len(normalized), len(raw) + 1)
+
+    def test_streamed_invalid_jsonl_quarantines_with_same_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "broken.jsonl"
+            raw = b'{"a":1}\n\n{"broken":}\n'
+            path.write_bytes(raw)
+            store = FileSystemStore(Path(tmp) / ".ingest")
+
+            result = Ingestor(
+                store,
+                adapters=[FileAdapter()],
+            ).ingest(FileSource(str(path)))
+
+            self.assertEqual(result.status, IngestStatus.QUARANTINED)
+            self.assertEqual(
+                result.error,
+                str(self._jsonl_error(raw)),
+            )
+            self.assertIsNone(result.normalized_artifact)
+            self.assertEqual(
+                (store.root / result.raw_artifact.storage_locator).read_bytes(),
+                raw,
+            )
+
+    @staticmethod
+    def _jsonl_error(data):
+        try:
+            normalize_bytes(data, "application/x-ndjson")
+        except NormalizationError as exc:
+            return exc
+        raise AssertionError("expected JSONL normalization error")
 
     def test_jsonl_file_is_canonicalized_line_by_line(self):
         with tempfile.TemporaryDirectory() as tmp:

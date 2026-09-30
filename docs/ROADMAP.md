@@ -60,15 +60,17 @@ Moves the default GitHub transport onto metadata-preflight + raw-blob streaming 
 
 Local-file chunks now feed an incremental UTF-8/NUL/leading-token sniffer during raw CAS publication. Definitive opaque/non-normalized inputs can avoid post-capture blob materialization. JSON-looking content still falls back to the original full byte sniffer so semantics remain stable.
 
-### 2. Incremental normalization
+### 2. Incremental normalization ? JSONL implemented on hardening line
 
-Design streaming-safe normalizers for:
+JSONL/NDJSON now uses incremental UTF-8 decoding, Python-compatible line-boundary semantics, line-by-line canonicalization, verified raw CAS chunk iteration, and streamed derived CAS publication. Existing canonical bytes and error semantics are preserved, so `ingest-normalizer-v1` remains correct.
 
-- UTF-8 text with incremental decoder + NFC boundary handling;
-- JSONL line-by-line canonicalization;
-- large JSON only if a deterministic bounded parser strategy is acceptable.
+Remaining work:
 
-Any new normalizer version must be identity-visible.
+- UTF-8 text with incremental decoder plus NFC boundary handling;
+- monolithic/large JSON only if a deterministic bounded parser strategy is acceptable;
+- remove generic sniff-stage materialization for JSON-looking streams without changing raw media classification semantics.
+
+Any semantic normalizer change must be identity-visible.
 
 ### 3. HTTP streaming acquisition — implemented on hardening line
 
