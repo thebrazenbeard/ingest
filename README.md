@@ -11,6 +11,7 @@ The core rule is simple:
 ## What V1 accepts
 
 - inline text and bytes;
+- caller-provided byte streams through `StreamSource`, with mandatory policy byte bounds and streaming CAS admission;
 - local files with optional absolute-root confinement (CLI `--root` values are resolved to absolute paths before policy construction); raw local-file capture streams descriptor-bound chunks directly into the content-addressed store instead of first constructing one in-memory `bytes` payload;
 - HTTP(S) resources with bounded streaming body capture, redirects, timeouts, validated-address connection pinning, and private-network denial;
 - public/authenticated GitHub files through an injected transport, with mutable refs resolved to exact commits before acquisition; the default transport preflights exact blob metadata, streams raw Git blob bytes into CAS, recomputes Git object identity incrementally, and converts transport failures into governed acquisition failures;
@@ -56,6 +57,16 @@ store = FileSystemStore(".ingest")
 ingestor = Ingestor(store)
 result = ingestor.ingest(TextSource("hello", locator="urn:example:hello"))
 print(result.status, result.ingest_id)
+
+# Upstream systems can stream bytes without pre-buffering the whole payload.
+from ingest import StreamSource
+streamed = ingestor.ingest(
+    StreamSource(
+        [b"chunk-1", b"chunk-2"],
+        locator="urn:example:stream",
+        media_type="application/octet-stream",
+    )
+)
 ```
 
 Batch ingestion is the same primitive repeated:

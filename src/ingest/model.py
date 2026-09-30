@@ -214,6 +214,14 @@ class BytesSource:
 
 
 @dataclass(frozen=True, slots=True)
+class StreamSource:
+    chunks: Iterable[bytes]
+    locator: str
+    media_type: str | None = None
+    source_identity: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class FileSource:
     path: str
 

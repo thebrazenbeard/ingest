@@ -38,7 +38,8 @@ Ingest is deliberately below downstream ontology. Intake is not truth adjudicati
 2. local files;
 3. HTTP(S) resources;
 4. GitHub repository files with exact-commit resolution;
-5. generic message/event envelopes.
+5. generic message/event envelopes;
+6. caller-provided byte streams with explicit locator/identity claims and policy-bounded streaming admission.
 
 Structured JSON and JSONL are transformations over acquired bytes rather than separate truth-bearing source classes.
 
@@ -197,6 +198,7 @@ Concurrent same-identity ingestion is first-writer-wins only after verifying det
 ## Public Python interfaces
 
 - `Ingestor.ingest(source, policy=None) -> IngestResult`
+- `StreamSource(chunks, locator, media_type=None, source_identity={})` for caller-owned chunk iterables; default source identity remains locator-bound and exact bytes still determine artifact identity
 - `Ingestor.ingest_many(sources, policy=None) -> list[IngestResult]`
 - adapter contract: `supports(source)` + `acquire(source, policy) -> Acquisition`; adapters may additionally implement `acquire_stream(source, policy) -> StreamingAcquisition` for bounded raw streaming
 - `FileSystemStore` artifact/record/receipt/derivation operations with fail-closed read verification, including incremental artifact hashing, bounded immutable collision verification, streaming blob publication, pre-read artifact-size checks, and same-ingest derivation receipt binding

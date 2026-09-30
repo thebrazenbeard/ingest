@@ -20,6 +20,10 @@ Persisted HTTP provenance strips URL userinfo, query, and fragment from the huma
 
 Mutable refs are resolved to exact commits before content acquisition. The default GitHub API transport first reads file/blob metadata at that exact commit, validates the declared size against `max_bytes`, then opens the raw blob media path and streams bounded chunks into CAS. Git object identity is recomputed incrementally as `hash("blob <size>\\0" + exact bytes)` and must match the repository-reported blob SHA before the stream can finalize. Network, HTTP, invalid-JSON, raw-read, metadata-size, and blob-identity failures are normalized into governed acquisition failures. `.json`, `.jsonl`, and `.ndjson` are parser-driving from their path extensions even if the host MIME database disagrees. Credentials are constructor/transport state and are never persisted in provenance objects or receipts. Exact commit/blob identity is evidence of source selection, not proof that repository content is safe or true.
 
+## Caller-provided streams
+
+`StreamSource` treats caller-provided iterables as untrusted acquisition sources. The adapter binds the `stream` scheme, caller locator, adapter name/version, and optional caller-provided stable identity mapping into source identity; caller metadata never substitutes for content-derived artifact identity. Chunk type is validated, iterator failures are converted to governed acquisition failures, and the normal raw `max_bytes` ceiling remains mandatory. Failed or over-limit streams do not publish completed raw blobs.
+
 ## Structured parsing
 
 JSON and JSONL use Python's data-only JSON parser and strict canonical serialization. Unsupported objects and non-finite numbers (`NaN`, `Infinity`, overflow to infinity) are not silently stringified or emitted as non-standard JSON. Claimed structured data that cannot be represented as strict JSON is quarantined after raw preservation; invalid structured message payloads are rejected before admission. No archive extraction is performed in V1, preventing archive-bomb/path-traversal classes from entering the core pipeline.
