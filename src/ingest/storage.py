@@ -674,6 +674,359 @@ class FileSystemStore:
             "issues": issues,
         }
 
+    def audit_store(
+        self,
+        *,
+        stale_after_seconds: float = 86400.0,
+    ) -> dict[str, Any]:
+        if (
+            not math.isfinite(stale_after_seconds)
+            or stale_after_seconds < 0
+        ):
+            raise ValueError(
+                "stale_after_seconds must be finite and non-negative"
+            )
+
+        cutoff = time.time() - stale_after_seconds
+        issues: list[dict[str, Any]] = []
+        stale_temp_files: list[str] = []
+        referenced_blobs: set[str] = set()
+        referenced_receipts: set[str] = set()
+        referenced_derivations: set[str] = set()
+        valid_blobs: set[str] = set()
+        valid_receipts: set[str] = set()
+        valid_derivations: set[str] = set()
+        records_checked = 0
+        records_ok = 0
+        records_corrupt = 0
+        inventory = {
+            "records": 0,
+            "blobs": 0,
+            "receipts": 0,
+            "derivations": 0,
+            "temp_files": 0,
+        }
+
+        def relative(path: Path) -> str:
+            return path.relative_to(self.root).as_posix()
+
+        def add_issue(
+            kind: str,
+            path: Path,
+            error: str,
+            **identity: Any,
+        ) -> None:
+            issue = {
+                "kind": kind,
+                "entry": relative(path),
+                "error": error,
+            }
+            issue.update(identity)
+            issues.append(issue)
+
+        def handle_temp(path: Path) -> bool:
+            if not path.name.startswith(".tmp-"):
+                return False
+            inventory["temp_files"] += 1
+            if self._is_link_like(path) or not path.is_file():
+                add_issue(
+                    "unexpected_entry",
+                    path,
+                    "temporary store entry is not a regular file",
+                )
+                return True
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                return True
+            if info.st_mtime <= cutoff:
+                stale_temp_files.append(relative(path))
+            return True
+
+        allowed_roots = {
+            "blobs",
+            "records",
+            "receipts",
+            "derivations",
+        }
+        try:
+            root_entries = sorted(
+                self.root.iterdir(),
+                key=lambda value: value.name,
+            )
+        except OSError as exc:
+            issues.append(
+                {
+                    "kind": "store_unreadable",
+                    "entry": ".",
+                    "error": exc.strerror or "store root enumeration failed",
+                }
+            )
+            root_entries = []
+
+        for entry in root_entries:
+            if entry.name not in allowed_roots:
+                if handle_temp(entry):
+                    continue
+                add_issue(
+                    "unexpected_entry",
+                    entry,
+                    "unexpected store root entry",
+                )
+                continue
+            if self._is_link_like(entry) or not entry.is_dir():
+                add_issue(
+                    "unexpected_entry",
+                    entry,
+                    "managed store category is not a regular directory",
+                )
+
+        records_dir = self.root / "records"
+        if records_dir.is_dir() and not self._is_link_like(records_dir):
+            for entry in sorted(records_dir.iterdir(), key=lambda value: value.name):
+                if handle_temp(entry):
+                    continue
+                ingest_id = (
+                    entry.name[:-5]
+                    if entry.name.endswith(".json")
+                    else None
+                )
+                if (
+                    self._is_link_like(entry)
+                    or not entry.is_file()
+                    or ingest_id is None
+                    or not self._is_ingest_id(ingest_id)
+                ):
+                    add_issue(
+                        "unexpected_entry",
+                        entry,
+                        "unexpected records directory entry",
+                    )
+                    continue
+
+                inventory["records"] += 1
+                records_checked += 1
+                try:
+                    record = self.get_record(ingest_id)
+                except (
+                    FileNotFoundError,
+                    StoreConflict,
+                    StoreIntegrityError,
+                    OSError,
+                ) as exc:
+                    records_corrupt += 1
+                    add_issue(
+                        "record_corrupt",
+                        entry,
+                        str(exc),
+                        ingest_id=ingest_id,
+                    )
+                    continue
+
+                records_ok += 1
+                for key in ("raw_artifact", "normalized_artifact"):
+                    artifact = record.get(key)
+                    if isinstance(artifact, dict):
+                        artifact_id = artifact.get("artifact_id")
+                        if isinstance(artifact_id, str):
+                            referenced_blobs.add(artifact_id)
+                for receipt_id in record.get("receipt_ids") or []:
+                    if isinstance(receipt_id, str):
+                        referenced_receipts.add(receipt_id)
+                for derivation_id in record.get("derivation_ids") or []:
+                    if not isinstance(derivation_id, str):
+                        continue
+                    referenced_derivations.add(derivation_id)
+                    try:
+                        derivation = self.get_derivation(derivation_id)
+                    except (
+                        FileNotFoundError,
+                        StoreConflict,
+                        StoreIntegrityError,
+                        OSError,
+                    ):
+                        continue
+                    receipt_id = derivation.get("receipt_id")
+                    if isinstance(receipt_id, str):
+                        referenced_receipts.add(receipt_id)
+
+        for category, getter, valid, id_key, issue_kind in (
+            (
+                "receipts",
+                self.get_receipt,
+                valid_receipts,
+                "receipt_id",
+                "receipt_corrupt",
+            ),
+            (
+                "derivations",
+                self.get_derivation,
+                valid_derivations,
+                "derivation_id",
+                "derivation_corrupt",
+            ),
+        ):
+            directory = self.root / category
+            if not directory.is_dir() or self._is_link_like(directory):
+                continue
+            for entry in sorted(directory.iterdir(), key=lambda value: value.name):
+                if handle_temp(entry):
+                    continue
+                object_id = (
+                    entry.name[:-5]
+                    if entry.name.endswith(".json")
+                    else None
+                )
+                if (
+                    self._is_link_like(entry)
+                    or not entry.is_file()
+                    or object_id is None
+                ):
+                    add_issue(
+                        "unexpected_entry",
+                        entry,
+                        f"unexpected {category} directory entry",
+                    )
+                    continue
+                inventory[category] += 1
+                try:
+                    getter(object_id)
+                except (
+                    FileNotFoundError,
+                    StoreConflict,
+                    StoreIntegrityError,
+                    OSError,
+                ) as exc:
+                    add_issue(
+                        issue_kind,
+                        entry,
+                        str(exc),
+                        **{id_key: object_id},
+                    )
+                else:
+                    valid.add(object_id)
+
+        blobs_dir = self.root / "blobs"
+        sha_dir = blobs_dir / "sha256"
+        if blobs_dir.is_dir() and not self._is_link_like(blobs_dir):
+            for entry in sorted(blobs_dir.iterdir(), key=lambda value: value.name):
+                if handle_temp(entry):
+                    continue
+                if entry.name != "sha256":
+                    add_issue(
+                        "unexpected_entry",
+                        entry,
+                        "unexpected blob namespace entry",
+                    )
+                    continue
+                if self._is_link_like(entry) or not entry.is_dir():
+                    add_issue(
+                        "unexpected_entry",
+                        entry,
+                        "SHA-256 namespace is not a regular directory",
+                    )
+            if sha_dir.is_dir() and not self._is_link_like(sha_dir):
+                for prefix_dir in sorted(
+                    sha_dir.iterdir(),
+                    key=lambda value: value.name,
+                ):
+                    if handle_temp(prefix_dir):
+                        continue
+                    valid_prefix = (
+                        not self._is_link_like(prefix_dir)
+                        and prefix_dir.is_dir()
+                        and len(prefix_dir.name) == 2
+                        and all(
+                            char in "0123456789abcdef"
+                            for char in prefix_dir.name
+                        )
+                    )
+                    if not valid_prefix:
+                        add_issue(
+                            "unexpected_entry",
+                            prefix_dir,
+                            "unexpected SHA-256 prefix entry",
+                        )
+                        continue
+                    for entry in sorted(
+                        prefix_dir.iterdir(),
+                        key=lambda value: value.name,
+                    ):
+                        if handle_temp(entry):
+                            continue
+                        digest = entry.name
+                        if (
+                            self._is_link_like(entry)
+                            or not entry.is_file()
+                            or not self._is_ingest_id(digest)
+                            or digest[:2] != prefix_dir.name
+                        ):
+                            add_issue(
+                                "unexpected_entry",
+                                entry,
+                                "unexpected SHA-256 blob entry",
+                            )
+                            continue
+                        inventory["blobs"] += 1
+                        artifact_id = f"sha256:{digest}"
+                        try:
+                            info = entry.lstat()
+                            self._verify_managed_sha256(
+                                entry,
+                                expected_size=info.st_size,
+                                expected_sha256=digest,
+                            )
+                        except (
+                            FileNotFoundError,
+                            StoreConflict,
+                            StoreIntegrityError,
+                            OSError,
+                        ) as exc:
+                            add_issue(
+                                "blob_corrupt",
+                                entry,
+                                str(exc),
+                                artifact_id=artifact_id,
+                            )
+                        else:
+                            valid_blobs.add(artifact_id)
+
+        unreferenced_blobs = sorted(valid_blobs - referenced_blobs)
+        unreferenced_receipts = sorted(
+            valid_receipts - referenced_receipts
+        )
+        unreferenced_derivations = sorted(
+            valid_derivations - referenced_derivations
+        )
+        stale_temp_files.sort()
+
+        has_inventory_issues = bool(
+            unreferenced_blobs
+            or unreferenced_receipts
+            or unreferenced_derivations
+            or stale_temp_files
+        )
+        status = (
+            "CORRUPT"
+            if issues
+            else "ISSUES"
+            if has_inventory_issues
+            else "PASS"
+        )
+        return {
+            "schema": "INGEST_STORE_AUDIT_V1",
+            "status": status,
+            "records_checked": records_checked,
+            "records_ok": records_ok,
+            "records_corrupt": records_corrupt,
+            "inventory": inventory,
+            "unreferenced_blobs": unreferenced_blobs,
+            "unreferenced_receipts": unreferenced_receipts,
+            "unreferenced_derivations": unreferenced_derivations,
+            "stale_temp_files": stale_temp_files,
+            "issues": issues,
+        }
+
     def get_receipt(self, receipt_id: str) -> dict[str, Any]:
         payload = self._read_canonical_json("receipts", receipt_id)
         if payload.get("schema") != "INGEST_STAGE_RECEIPT_V1":

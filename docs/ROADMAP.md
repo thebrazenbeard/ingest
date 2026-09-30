@@ -98,9 +98,9 @@ Do not turn Ingest into a workflow engine.
 
 `CAPTURE_SESSION_ID != ARTIFACT_ID != INGEST_ID`
 
-### 8. Whole-store inventory audit
+### 8. Whole-store inventory audit ? implemented on hardening line
 
-Current record audit follows record graphs. A separate inventory audit may later detect orphan blobs, receipts, derivations, stale staging, and unexpected directory entries without deleting them automatically.
+`audit-store` inventories records, blobs, receipts, derivations, and temp files; validates published objects and managed structure; reports objects unreferenced by valid record graphs; distinguishes `ISSUES` from `CORRUPT`; and performs no automatic deletion. A future scale pass should bound/report very large inventories without changing those semantics.
 
 ## Non-goals that remain non-goals
 

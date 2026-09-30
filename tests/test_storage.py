@@ -519,6 +519,139 @@ class StorageDurabilityTests(unittest.TestCase):
                 "not-a-record.tmp",
             )
 
+    def test_audit_store_passes_clean_inventory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            Ingestor(store).ingest(
+                TextSource("clean\r\ninventory", locator="urn:store-audit:clean")
+            )
+
+            report = store.audit_store()
+
+            self.assertEqual(report["schema"], "INGEST_STORE_AUDIT_V1")
+            self.assertEqual(report["status"], "PASS")
+            self.assertEqual(report["records_checked"], 1)
+            self.assertEqual(report["records_corrupt"], 0)
+            self.assertEqual(report["unreferenced_blobs"], [])
+            self.assertEqual(report["unreferenced_receipts"], [])
+            self.assertEqual(report["unreferenced_derivations"], [])
+            self.assertEqual(report["stale_temp_files"], [])
+            self.assertEqual(report["issues"], [])
+
+    def test_audit_store_reports_unreferenced_objects_and_stale_temp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            store = FileSystemStore(root)
+            result = Ingestor(store).ingest(
+                TextSource("referenced", locator="urn:store-audit:referenced")
+            )
+            orphan_artifact, _created = store.put_blob(
+                b"orphan-blob",
+                media_type="application/octet-stream",
+                kind="raw",
+            )
+            receipt = store.get_receipt(result.receipt_ids[0])
+            orphan_receipt = dict(receipt)
+            orphan_receipt["receipt_id"] = "r_orphan_inventory"
+            body = dict(orphan_receipt)
+            body.pop("receipt_digest")
+            orphan_receipt["receipt_digest"] = canonical_digest(body)
+            store.put_receipt(orphan_receipt["receipt_id"], orphan_receipt)
+
+            temp_path = root / "blobs" / "sha256" / ".tmp-stale-audit"
+            temp_path.write_bytes(b"stale")
+            old = time.time() - 7200
+            os.utime(temp_path, (old, old))
+
+            report = store.audit_store(stale_after_seconds=3600)
+
+            self.assertEqual(report["status"], "ISSUES")
+            self.assertIn(
+                orphan_artifact.artifact_id,
+                report["unreferenced_blobs"],
+            )
+            self.assertIn(
+                orphan_receipt["receipt_id"],
+                report["unreferenced_receipts"],
+            )
+            self.assertIn(
+                "blobs/sha256/.tmp-stale-audit",
+                report["stale_temp_files"],
+            )
+            self.assertEqual(report["issues"], [])
+
+    def test_audit_store_reports_derivation_unreferenced_by_valid_record_graph(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            store = FileSystemStore(root)
+            result = Ingestor(store).ingest(
+                TextSource(
+                    "orphan\r\nderivation",
+                    locator="urn:store-audit:orphan-derivation",
+                )
+            )
+            self.assertTrue(result.derivation_ids)
+            (root / "records" / f"{result.ingest_id}.json").unlink()
+
+            report = store.audit_store()
+
+            self.assertEqual(report["status"], "ISSUES")
+            self.assertIn(
+                result.derivation_ids[0],
+                report["unreferenced_derivations"],
+            )
+            self.assertTrue(report["unreferenced_receipts"])
+            self.assertTrue(report["unreferenced_blobs"])
+
+    def test_audit_store_distinguishes_corruption_from_inventory_issues(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            store = FileSystemStore(root)
+            result = Ingestor(store).ingest(
+                TextSource("corrupt", locator="urn:store-audit:corrupt")
+            )
+            (root / result.raw_artifact.storage_locator).write_bytes(b"broken")
+            unexpected = root / "receipts" / "unexpected.txt"
+            unexpected.write_text("junk", encoding="utf-8")
+
+            report = store.audit_store()
+
+            self.assertEqual(report["status"], "CORRUPT")
+            kinds = {issue["kind"] for issue in report["issues"]}
+            self.assertIn("record_corrupt", kinds)
+            self.assertIn("unexpected_entry", kinds)
+
+    def test_audit_store_flags_symlinked_sha256_namespace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".ingest"
+            outside = Path(tmp) / "outside-blobs"
+            outside.mkdir()
+            store = FileSystemStore(root)
+            (root / "blobs").mkdir()
+            (root / "blobs" / "sha256").symlink_to(
+                outside,
+                target_is_directory=True,
+            )
+
+            report = store.audit_store()
+
+            self.assertEqual(report["status"], "CORRUPT")
+            self.assertTrue(
+                any(
+                    issue["kind"] == "unexpected_entry"
+                    and issue["entry"] == "blobs/sha256"
+                    for issue in report["issues"]
+                )
+            )
+
+    def test_audit_store_rejects_invalid_stale_age(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            for value in (-1.0, math.nan, math.inf):
+                with self.subTest(value=value):
+                    with self.assertRaises(ValueError):
+                        store.audit_store(stale_after_seconds=value)
+
     @unittest.skipIf(os.name == "nt", "directory fsync is not portable on Windows")
     def test_posix_directory_sync_succeeds_on_real_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

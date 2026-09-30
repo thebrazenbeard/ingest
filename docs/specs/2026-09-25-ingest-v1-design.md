@@ -202,6 +202,8 @@ Concurrent same-identity ingestion is first-writer-wins only after verifying det
 - `FileSystemStore` artifact/record/receipt/derivation operations with fail-closed read verification, including incremental artifact hashing, bounded immutable collision verification, streaming blob publication, pre-read artifact-size checks, and same-ingest derivation receipt binding
 - `StoreIntegrityError` for corrupted or internally inconsistent persisted evidence
 - `FileSystemStore.cleanup_stale_temp_files(older_than_seconds=86400.0) -> {files_removed, bytes_removed}` for explicit bounded cleanup of interrupted-write residue
+- `FileSystemStore.audit_records() -> INGEST_RECORD_AUDIT_V1` for deep verification of persisted record graphs
+- `FileSystemStore.audit_store(stale_after_seconds=86400.0) -> INGEST_STORE_AUDIT_V1` for read-only whole-store inventory, published-object validation, unreferenced-object reporting, and stale-temp discovery
 
 ## CLI contract
 
