@@ -210,23 +210,26 @@ class HttpAdapter:
                         timeout=policy.timeout_seconds,
                     )
             except HTTPError as exc:
-                if (
-                    exc.code in {301, 302, 303, 307, 308}
-                    and exc.headers.get("Location")
-                ):
-                    if redirects >= policy.max_redirects:
-                        raise PolicyRejected(
-                            "redirect limit exceeded"
-                        ) from exc
-                    current = urljoin(
-                        current,
-                        exc.headers["Location"],
-                    )
-                    redirects += 1
-                    continue
-                raise AcquisitionFailed(
-                    f"HTTP error {exc.code}"
-                ) from exc
+                try:
+                    if (
+                        exc.code in {301, 302, 303, 307, 308}
+                        and exc.headers.get("Location")
+                    ):
+                        if redirects >= policy.max_redirects:
+                            raise PolicyRejected(
+                                "redirect limit exceeded"
+                            ) from exc
+                        current = urljoin(
+                            current,
+                            exc.headers["Location"],
+                        )
+                        redirects += 1
+                        continue
+                    raise AcquisitionFailed(
+                        f"HTTP error {exc.code}"
+                    ) from exc
+                finally:
+                    self._close_response(exc)
             except URLError as exc:
                 raise AcquisitionFailed(
                     f"HTTP acquisition failed: {exc.reason}"

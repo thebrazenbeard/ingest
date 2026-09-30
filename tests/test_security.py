@@ -5,7 +5,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 from ingest import FileSystemStore, IngestPolicy, IngestStatus, Ingestor, UrlSource
 from ingest.adapters.base import AcquisitionFailed, PolicyRejected
@@ -77,6 +77,76 @@ class SecurityTests(unittest.TestCase):
 
         self.assertEqual(acquisition.data, b"hello")
         self.assertEqual(acquisition.source.observed_metadata["redirects"], 1)
+
+    def test_http_error_responses_closed_on_redirect_and_terminal_error(self):
+        class TrackedHTTPError(HTTPError):
+            def __init__(self, url, code, location=None):
+                headers = {"Location": location} if location else {}
+                super().__init__(url, code, "test", headers, None)
+                self.was_closed = False
+
+            def close(self):
+                self.was_closed = True
+                super().close()
+
+        class FinalResponse:
+            status = 200
+            headers = {"Content-Type": "text/plain"}
+
+            def __init__(self, url):
+                self.url = url
+                self.closed = False
+
+            def geturl(self):
+                return self.url
+
+            def read(self, _limit):
+                return b"ok"
+
+            def close(self):
+                self.closed = True
+
+        class FakeOpener:
+            def __init__(self, status):
+                self.status = status
+                self.errors = []
+                self.final = None
+
+            def open(self, request, timeout):
+                url = request.full_url
+                if self.status == 302 and url.endswith("/final"):
+                    self.final = FinalResponse(url)
+                    return self.final
+                error = TrackedHTTPError(
+                    url,
+                    self.status,
+                    "https://example.test/final" if self.status == 302 else None,
+                )
+                self.errors.append(error)
+                raise error
+
+        source = UrlSource("https://example.test/start")
+        for status, max_redirects in ((302, 3), (302, 0), (404, 3)):
+            with self.subTest(status=status, max_redirects=max_redirects):
+                opener = FakeOpener(status)
+                adapter = HttpAdapter(opener=opener)
+                policy = IngestPolicy(
+                    deny_private_networks=False,
+                    max_redirects=max_redirects,
+                )
+                if status == 302 and max_redirects:
+                    acquired = adapter.acquire(source, policy)
+                    self.assertEqual(acquired.data, b"ok")
+                    self.assertTrue(opener.final.closed)
+                else:
+                    expected = PolicyRejected if status == 302 else AcquisitionFailed
+                    with self.assertRaises(expected):
+                        adapter.acquire(source, policy)
+                self.assertEqual(len(opener.errors), 1)
+                self.assertTrue(
+                    opener.errors[0].was_closed,
+                    "HTTPError response was not closed",
+                )
 
     def test_ingestor_streams_http_capture_instead_of_buffered_acquire(self):
         class ChunkedResponse:
