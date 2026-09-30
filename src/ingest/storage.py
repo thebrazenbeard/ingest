@@ -407,12 +407,11 @@ class FileSystemStore:
         chunks,
         *,
         media_type: str,
-        kind: str = "normalized",
     ) -> tuple[Artifact, bool]:
         return self._put_blob_stream(
             chunks,
             media_type=media_type,
-            kind=kind,
+            kind="normalized",
             max_bytes=None,
         )
 

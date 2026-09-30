@@ -170,6 +170,24 @@ class StorageDurabilityTests(unittest.TestCase):
             with self.assertRaises(StoreIntegrityError):
                 store.get_record(result.ingest_id)
 
+    def test_put_derived_blob_stream_is_normalized_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            artifact, created = store.put_derived_blob_stream(
+                [b"derived"],
+                media_type="text/plain",
+            )
+
+            self.assertTrue(created)
+            self.assertEqual(artifact.kind, "normalized")
+
+            with self.assertRaises(TypeError):
+                store.put_derived_blob_stream(
+                    [b"not-allowed"],
+                    media_type="application/octet-stream",
+                    kind="raw",
+                )
+
     def test_put_blob_stream_publishes_exact_bytes_and_dedupes(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FileSystemStore(Path(tmp) / ".ingest")
