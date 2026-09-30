@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "INGEST_RECORD_AUDIT_V1",
+  "type": "object",
+  "required": [
+    "schema",
+    "status",
+    "records_checked",
+    "records_ok",
+    "records_corrupt",
+    "issues"
+  ],
+  "properties": {
+    "schema": {
+      "const": "INGEST_RECORD_AUDIT_V1"
+    },
+    "status": {
+      "enum": [
+        "PASS",
+        "CORRUPT"
+      ]
+    },
+    "records_checked": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "records_ok": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "records_corrupt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/issue"
+      }
+    }
+  },
+  "$defs": {
+    "issue": {
+      "type": "object",
+      "required": [
+        "entry",
+        "ingest_id",
+        "error"
+      ],
+      "properties": {
+        "entry": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ingest_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
