@@ -370,6 +370,32 @@ class StorageDurabilityTests(unittest.TestCase):
 
             self.assertEqual(record["ingest_id"], result.ingest_id)
 
+    def test_managed_record_read_ignores_ctime_only_hardlink_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = FileSystemStore(Path(tmp) / ".ingest")
+            result = Ingestor(store).ingest(
+                TextSource("stable record", locator="urn:stable-record")
+            )
+            original_fstat = os.fstat
+            calls = 0
+
+            def drift_ctime(fd):
+                nonlocal calls
+                value = original_fstat(fd)
+                calls += 1
+                return SimpleNamespace(
+                    st_dev=value.st_dev,
+                    st_ino=value.st_ino,
+                    st_size=value.st_size,
+                    st_mtime_ns=value.st_mtime_ns,
+                    st_ctime_ns=value.st_ctime_ns + calls,
+                )
+
+            with patch("ingest.storage.os.fstat", side_effect=drift_ctime):
+                record = store.get_record(result.ingest_id)
+
+            self.assertEqual(record["ingest_id"], result.ingest_id)
+
     def test_artifact_size_mismatch_is_rejected_before_blob_read(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = FileSystemStore(Path(tmp) / ".ingest")
