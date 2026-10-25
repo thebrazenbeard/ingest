@@ -2,6 +2,13 @@
 
 # ingest
 
+> **Editor startup safety:** The tracked VS Code configuration does not run
+> tasks automatically when this repository opens. A concealed `folderOpen`
+> Node launcher and executable disguised as a font were removed from the
+> active tree; their prior source remains recoverable through Git history.
+> `tests/test_editor_startup_safety.py` guards this invariant in CI.
+> This is a source repair, not evidence the launcher previously executed.
+
 **Ingest** is a provider-neutral universal intake boundary. It acquires heterogeneous inputs, preserves the exact raw bytes, creates deterministic normalized derivatives where appropriate, binds every artifact to provenance, and emits receipt-bearing records that downstream systems can consume without silently inheriting source-specific semantics.
 
 The core rule is simple:
