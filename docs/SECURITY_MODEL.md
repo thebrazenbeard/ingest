@@ -10,7 +10,7 @@ Configured `allowed_roots` must be absolute paths and are resolved before use. T
 
 ## HTTP(S)
 
-HTTPS is the default. Plain HTTP requires `allow_http=True`. Each requested/redirect URL is policy-checked, redirect count is bounded, body streaming is capped by `max_bytes`, and a timeout is mandatory. A returned final URL is checked and provenance-bound before its response body is consumed. Private, loopback, link-local, multicast, reserved, and unspecified destinations are denied by default.
+HTTPS is the default. Plain HTTP requires `allow_http=True`. Each requested/redirect URL is policy-checked, redirect count is bounded, body streaming is capped by `max_bytes`, and a timeout is mandatory. A returned final URL is checked and provenance-bound before its response body is consumed. With private-network denial enabled (the default), non-global destinations are rejected, including RFC 6598 shared space (`100.64.0.0/10`) even though Python does not label it private or reserved. Private, loopback, link-local, multicast, reserved, and unspecified addresses also remain explicitly forbidden; some multicast addresses are misleadingly labeled `is_global` by Python.
 
 The default stdlib V1 transport resolves each destination, rejects forbidden answers under policy, and connects directly to a validated IP instead of handing the hostname back to the socket layer for a second resolution. HTTPS still uses the original hostname for TLS certificate verification. This binds the default connection to the address set that actually passed policy validation. If a caller injects a custom opener, requested/final URLs are still policy-checked, but connection binding becomes that opener's responsibility.
 
