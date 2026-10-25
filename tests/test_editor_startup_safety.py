@@ -29,7 +29,7 @@ class EditorStartupSafetyTests(unittest.TestCase):
         settings_path = ROOT / ".vscode" / "settings.json"
         self.assertTrue(settings_path.is_file(), "Safety-reviewed editor settings are required")
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        self.assertEqual(settings.get("task.allowAutomaticTasks"), "off")
+        self.assertNotIn("task.allowAutomaticTasks", settings)
         self.assertNotIn("tasks", settings)
 
     def test_no_folder_open_in_any_editor_configuration(self):
