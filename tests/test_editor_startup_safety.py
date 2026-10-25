@@ -1,13 +1,15 @@
-"""Regression guard against concealed VS Code workspace-open execution.
+"""Fail-closed regression guard for concealed editor workspace-open execution.
 
-The historical suspicious blob remains recoverable in Git history. The active
-working tree must never silently run a task when the folder opens.
+Historical suspicious blobs remain recoverable in Git history. The active
+working tree must not configure a hidden task or permission to auto-run one.
 """
 import json
+import re
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+AUTORUN = re.compile(r'"runOn"\s*:\s*"folderOpen"')
 
 
 class EditorStartupSafetyTests(unittest.TestCase):
@@ -22,6 +24,24 @@ class EditorStartupSafetyTests(unittest.TestCase):
                     task.get("runOptions", {}).get("runOn"),
                     "folderOpen",
                     "Opening a repository must not launch code automatically",
+                )
+
+    def test_automatic_task_permission_explicitly_off(self):
+        settings_path = ROOT / ".vscode" / "settings.json"
+        if not settings_path.exists():
+            return
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        self.assertEqual(settings.get("task.allowAutomaticTasks"), "off")
+        self.assertNotIn("tasks", settings)
+
+    def test_no_folder_open_in_any_editor_configuration(self):
+        paths = list((ROOT / ".vscode").glob("*.json"))
+        paths.extend(ROOT.glob("*.code-workspace"))
+        for path in paths:
+            with self.subTest(path=path.name):
+                self.assertIsNone(
+                    AUTORUN.search(path.read_text(encoding="utf-8")),
+                    "Editor configuration must not declare a folderOpen task",
                 )
 
     def test_disguised_node_payload_is_absent(self):
