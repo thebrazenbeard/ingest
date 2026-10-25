@@ -15,8 +15,13 @@ from .base import AcquisitionFailed, PolicyRejected
 
 def _ip_is_forbidden(value: str) -> bool:
     ip = ipaddress.ip_address(value)
+    # Keep all previously blocked classes as well as non-global destinations.
+    # RFC 6598 shared space (100.64.0.0/10) is not ``is_private`` or
+    # ``is_reserved``. Conversely, Python considers some multicast addresses
+    # ``is_global``; the old explicit multicast guard must remain in force.
     return (
-        ip.is_private
+        not ip.is_global
+        or ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_multicast

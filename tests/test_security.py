@@ -24,6 +24,58 @@ class SecurityTests(unittest.TestCase):
                 IngestPolicy(allow_http=True),
             )
 
+    def test_shared_address_dns_answers_are_denied_before_network_connect(self):
+        # RFC 6598 shared space is neither ``is_private`` nor ``is_reserved``
+        # in Python's ipaddress implementation, yet it is not public internet.
+        # A public-looking hostname must not be able to route to this space.
+        for address in ("100.64.0.1", "100.127.255.254", "::ffff:100.64.0.1"):
+            family = socket.AF_INET6 if ":" in address else socket.AF_INET
+            resolved = [(family, socket.SOCK_STREAM, 6, "", (address, 0))]
+            with self.subTest(address=address), patch(
+                "ingest.adapters.http.socket.getaddrinfo", return_value=resolved
+            ), patch(
+                "socket.create_connection",
+                side_effect=AssertionError("unsafe network connection attempted"),
+            ) as connect:
+                with self.assertRaises(PolicyRejected):
+                    HttpAdapter().acquire(
+                        UrlSource("https://public-looking.example/data"),
+                        IngestPolicy(),
+                    )
+                connect.assert_not_called()
+
+    def test_shared_address_literal_host_denied_but_public_addresses_allowed(self):
+        with self.assertRaises(PolicyRejected):
+            HttpAdapter._check_url(
+                "https://100.64.0.1/data", IngestPolicy()
+            )
+
+        for address in ("8.8.8.8", "2606:4700:4700::1111"):
+            family = socket.AF_INET6 if ":" in address else socket.AF_INET
+            resolved = [(family, socket.SOCK_STREAM, 6, "", (address, 0))]
+            with self.subTest(public=address), patch(
+                "ingest.adapters.http.socket.getaddrinfo", return_value=resolved
+            ):
+                self.assertEqual(
+                    HttpAdapter._check_url(
+                        "https://public-looking.example/data", IngestPolicy()
+                    ),
+                    (address,),
+                )
+
+    def test_multicast_remains_denied_even_when_ipaddress_calls_it_global(self):
+        # ``is_global`` alone must not replace the existing multicast guard.
+        for address in ("224.0.0.1", "239.255.255.250", "ff02::1", "::ffff:224.0.0.1"):
+            family = socket.AF_INET6 if ":" in address else socket.AF_INET
+            resolved = [(family, socket.SOCK_STREAM, 6, "", (address, 0))]
+            with self.subTest(address=address), patch(
+                "ingest.adapters.http.socket.getaddrinfo", return_value=resolved
+            ):
+                with self.assertRaises(PolicyRejected):
+                    HttpAdapter._check_url(
+                        "https://public-looking.example/data", IngestPolicy()
+                    )
+
     def test_default_http_transport_connects_to_validated_ip_not_hostname(self):
         public_ip = "93.184.216.34"
         resolved = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (public_ip, 0))]
