@@ -12,6 +12,5 @@
   "terminal.integrated.defaultProfile.windows": "Command Prompt",
   "terminal.integrated.inheritEnv": false,
   "jestrunner.configPath": "jest.unit.config.cjs",
-  "compile-hero.disable-compile-files-on-did-save-code": true,
-  "task.allowAutomaticTasks": "off"
+  "compile-hero.disable-compile-files-on-did-save-code": true
 }
