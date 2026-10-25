@@ -25,7 +25,7 @@ class EditorStartupSafetyTests(unittest.TestCase):
                     "Opening a repository must not launch code automatically",
                 )
 
-    def test_automatic_task_permission_explicitly_off(self):
+    def test_workspace_automatic_task_consent_is_absent(self):
         settings_path = ROOT / ".vscode" / "settings.json"
         self.assertTrue(settings_path.is_file(), "Safety-reviewed editor settings are required")
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
