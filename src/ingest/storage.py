@@ -5,6 +5,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import tempfile
 import time
 from typing import Any
@@ -27,7 +28,10 @@ class FileSystemStore:
         # a relative root stable after the caller changes its working directory
         # and prevents `..` components from escaping managed path checks.
         self.root = Path(os.path.abspath(os.fspath(root)))
+        self._root_identity: tuple[int, int] | None = None
         self._ensure_directory_chain(self.root)
+        current = self.root.lstat()
+        self._root_identity = (current.st_dev, current.st_ino)
 
     @staticmethod
     def _is_link_like(path: Path) -> bool:
@@ -57,6 +61,36 @@ class FileSystemStore:
         except ValueError as exc:
             raise StoreConflict(f"storage path escapes root: {path}") from exc
         self._assert_no_directory_links(path)
+        if self._root_identity is not None:
+            try:
+                current = self.root.lstat()
+            except OSError as exc:
+                raise StoreConflict("managed storage root is missing") from exc
+            if (current.st_dev, current.st_ino) != self._root_identity:
+                raise StoreConflict("managed storage root identity changed")
+
+    @staticmethod
+    def _validated_record_id(record_id: str) -> str:
+        # These keys become filename components on both Windows and POSIX.
+        # Reject traversal, separators, device names, and unbounded names
+        # *before* creating any filesystem path.
+        if (
+            not isinstance(record_id, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", record_id)
+            is None
+            or record_id.lower() in {
+                "con", "prn", "aux", "nul",
+                *(f"com{i}" for i in range(1, 10)),
+                *(f"lpt{i}" for i in range(1, 10)),
+            }
+        ):
+            raise StoreConflict("invalid managed record identifier")
+        return record_id
+
+    def _record_path(self, category: str, record_id: str) -> Path:
+        if category not in {"records", "receipts", "derivations"}:
+            raise StoreConflict("invalid managed record category")
+        return self.root / category / f"{self._validated_record_id(record_id)}.json"
 
     def _ensure_directory_chain(self, path: Path) -> None:
         path = Path(os.path.abspath(os.fspath(path)))
@@ -159,6 +193,11 @@ class FileSystemStore:
                 "older_than_seconds must be finite and non-negative"
             )
 
+        # The path may have been replaced since construction. This preflight
+        # is defense in depth, not a substitute for trusted parent ACLs or
+        # handle-relative traversal under concurrent adversarial renames.
+        self._assert_no_managed_links(self.root)
+
         cutoff = time.time() - older_than_seconds
         files_removed = 0
         bytes_removed = 0
@@ -169,6 +208,7 @@ class FileSystemStore:
             followlinks=False,
         ):
             directory = Path(dirpath)
+            self._assert_no_managed_links(directory)
             dirnames[:] = [
                 name
                 for name in dirnames
@@ -181,6 +221,7 @@ class FileSystemStore:
                 path = directory / name
                 if self._is_link_like(path):
                     continue
+                self._assert_no_managed_links(path)
                 try:
                     info = path.lstat()
                 except FileNotFoundError:
@@ -329,7 +370,7 @@ class FileSystemStore:
         category: str,
         record_id: str,
     ) -> dict[str, Any]:
-        path = self.root / category / f"{record_id}.json"
+        path = self._record_path(category, record_id)
         data = self._read_managed_bytes(path)
         try:
             payload = json.loads(data.decode("utf-8"))
@@ -662,7 +703,7 @@ class FileSystemStore:
 
     def _put_json(self, category: str, record_id: str, value: dict[str, Any]) -> bool:
         data = (canonical_json(value) + "\n").encode("utf-8")
-        return self._atomic_create(self.root / category / f"{record_id}.json", data)
+        return self._atomic_create(self._record_path(category, record_id), data)
 
     def put_record(self, ingest_id: str, value: dict[str, Any]) -> bool:
         return self._put_json("records", ingest_id, value)
@@ -674,7 +715,9 @@ class FileSystemStore:
         return self._put_json("derivations", derivation_id, value)
 
     def has_record(self, ingest_id: str) -> bool:
-        return (self.root / "records" / f"{ingest_id}.json").is_file()
+        path = self._record_path("records", ingest_id)
+        self._assert_no_managed_links(path)
+        return path.is_file()
 
     @staticmethod
     def _is_ingest_id(value: str) -> bool:
