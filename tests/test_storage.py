@@ -35,6 +35,59 @@ class ConstructorRecordingStore(FileSystemStore):
 
 
 class StorageDurabilityTests(unittest.TestCase):
+    def test_new_store_can_bootstrap_multiple_missing_ancestors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / "new" / "nested" / "cas"
+
+            store = FileSystemStore(root)
+            artifact, created = store.put_blob(
+                b"safe bootstrap",
+                media_type="text/plain",
+                kind="raw",
+            )
+
+            self.assertTrue(created)
+            self.assertEqual(store.read_blob_bytes(artifact), b"safe bootstrap")
+            self.assertTrue(root.is_dir())
+
+    def test_store_rejects_symlinked_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            outside = parent / "outside"
+            outside.mkdir()
+            root = parent / "cas"
+            try:
+                root.symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            with self.assertRaises(StoreConflict):
+                FileSystemStore(root)
+
+    def test_store_rejects_symlinked_root_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            outside = parent / "outside"
+            outside.mkdir()
+            linked = parent / "redirect"
+            try:
+                linked.symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            with self.assertRaises(StoreConflict):
+                FileSystemStore(linked / "new" / "cas")
+            self.assertFalse((outside / "new").exists())
+
+    def test_managed_path_cannot_lexically_escape_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "cas"
+            store = FileSystemStore(root)
+
+            with self.assertRaises(StoreConflict):
+                store._assert_no_managed_links(root / ".." / "escape")
+
     def test_new_store_root_syncs_its_parent_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
