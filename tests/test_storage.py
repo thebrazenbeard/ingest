@@ -35,6 +35,132 @@ class ConstructorRecordingStore(FileSystemStore):
 
 
 class StorageDurabilityTests(unittest.TestCase):
+    def test_new_store_can_bootstrap_multiple_missing_ancestors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / "new" / "nested" / "cas"
+
+            store = FileSystemStore(root)
+            artifact, created = store.put_blob(
+                b"safe bootstrap",
+                media_type="text/plain",
+                kind="raw",
+            )
+
+            self.assertTrue(created)
+            self.assertEqual(store.read_blob_bytes(artifact), b"safe bootstrap")
+            self.assertTrue(root.is_dir())
+
+    def test_store_rejects_symlinked_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            outside = parent / "outside"
+            outside.mkdir()
+            root = parent / "cas"
+            try:
+                root.symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            with self.assertRaises(StoreConflict):
+                FileSystemStore(root)
+
+    def test_store_rejects_symlinked_root_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            outside = parent / "outside"
+            outside.mkdir()
+            linked = parent / "redirect"
+            try:
+                linked.symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            with self.assertRaises(StoreConflict):
+                FileSystemStore(linked / "new" / "cas")
+            self.assertFalse((outside / "new").exists())
+
+    def test_managed_path_cannot_lexically_escape_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "cas"
+            store = FileSystemStore(root)
+
+            with self.assertRaises(StoreConflict):
+                store._assert_no_managed_links(root / ".." / "escape")
+
+    def test_record_identifier_rejects_cross_category_and_platform_escapes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "cas"
+            store = FileSystemStore(root)
+            methods = (
+                lambda key: store.put_record(key, {"schema": "TEST"}),
+                lambda key: store.put_receipt(key, {"schema": "TEST"}),
+                lambda key: store.put_derivation(key, {"schema": "TEST"}),
+                store.get_record,
+                store.get_receipt,
+                store.get_derivation,
+                store.has_record,
+            )
+            bad_ids = (
+                "../receipts/intrusion",
+                "..\\receipts\\intrusion",
+                "../../outside",
+                "/tmp/absolute",
+                "nested/name",
+                "name.json",
+                "CON",
+                "lpt9",
+                "",
+                "a" * 129,
+            )
+            for method in methods:
+                for bad_id in bad_ids:
+                    with self.subTest(method=getattr(method, "__name__", "put"), bad_id=bad_id):
+                        with self.assertRaises(StoreConflict):
+                            method(bad_id)
+            self.assertFalse((Path(tmp) / "outside").exists())
+            self.assertFalse((root / "receipts" / "intrusion.json").exists())
+
+    def test_post_construction_root_replaced_with_symlink_rejects_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / "cas"
+            outside = parent / "outside"
+            outside.mkdir()
+            sentinel = outside / ".tmp-preserve"
+            sentinel.write_text("keep", encoding="utf-8")
+            os.utime(sentinel, (time.time() - 7200, time.time() - 7200))
+            store = FileSystemStore(root)
+            saved = parent / "saved"
+            root.rename(saved)
+            try:
+                root.symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            with self.assertRaises(StoreConflict):
+                store.cleanup_stale_temp_files(older_than_seconds=0)
+            with self.assertRaises(StoreConflict):
+                store.has_record("anything")
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
+    def test_post_construction_root_replaced_with_directory_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / "cas"
+            store = FileSystemStore(root)
+            root.rename(parent / "old-cas")
+            root.mkdir()
+            outside_temp = root / ".tmp-preserve"
+            outside_temp.write_bytes(b"keep")
+            os.utime(outside_temp, (time.time() - 7200, time.time() - 7200))
+
+            with self.assertRaises(StoreConflict):
+                store.cleanup_stale_temp_files(older_than_seconds=0)
+            with self.assertRaises(StoreConflict):
+                store.put_record("record-1", {"schema": "TEST"})
+            self.assertEqual(outside_temp.read_bytes(), b"keep")
+
     def test_new_store_root_syncs_its_parent_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
