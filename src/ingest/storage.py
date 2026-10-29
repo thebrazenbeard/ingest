@@ -23,7 +23,10 @@ class StoreIntegrityError(RuntimeError):
 
 class FileSystemStore:
     def __init__(self, root: str | Path = ".ingest"):
-        self.root = Path(root)
+        # Normalize lexically, without resolving through any links. This keeps
+        # a relative root stable after the caller changes its working directory
+        # and prevents `..` components from escaping managed path checks.
+        self.root = Path(os.path.abspath(os.fspath(root)))
         self._ensure_directory_chain(self.root)
 
     @staticmethod
@@ -33,23 +36,30 @@ class FileSystemStore:
         is_junction = getattr(path, "is_junction", None)
         return bool(is_junction is not None and is_junction())
 
+    @classmethod
+    def _assert_no_directory_links(cls, path: Path) -> None:
+        """Reject link/junction redirects, including above the store root."""
+        cursor = Path(os.path.abspath(os.fspath(path)))
+        while True:
+            if cls._is_link_like(cursor):
+                raise StoreConflict(
+                    f"storage path cannot contain a symlink or junction: {cursor}"
+                )
+            parent = cursor.parent
+            if parent == cursor:
+                break
+            cursor = parent
+
     def _assert_no_managed_links(self, path: Path) -> None:
-        path = Path(path)
+        path = Path(os.path.abspath(os.fspath(path)))
         try:
-            relative = path.relative_to(self.root)
+            path.relative_to(self.root)
         except ValueError as exc:
             raise StoreConflict(f"storage path escapes root: {path}") from exc
-
-        current = self.root
-        for part in relative.parts:
-            current = current / part
-            if self._is_link_like(current):
-                raise StoreConflict(
-                    f"managed storage path cannot be a symlink or junction: {current}"
-                )
+        self._assert_no_directory_links(path)
 
     def _ensure_directory_chain(self, path: Path) -> None:
-        path = Path(path)
+        path = Path(os.path.abspath(os.fspath(path)))
         self._assert_no_managed_links(path)
         if path.exists():
             if not path.is_dir():
@@ -69,12 +79,14 @@ class FileSystemStore:
             raise NotADirectoryError(cursor)
 
         for directory in reversed(missing):
+            self._assert_no_directory_links(directory.parent)
             try:
                 directory.mkdir()
             except FileExistsError:
+                self._assert_no_directory_links(directory)
                 if not directory.is_dir():
                     raise
-            self._assert_no_managed_links(directory)
+            self._assert_no_directory_links(directory)
             self._fsync_directory(directory.parent)
 
     @staticmethod
