@@ -1,3 +1,5 @@
+import hashlib
+import io
 import os
 import tempfile
 import unittest
@@ -15,6 +17,8 @@ from ingest import (
     MessageSource,
 )
 from ingest.adapters import FileAdapter, GitHubAdapter, MessageAdapter, TextBytesAdapter
+from ingest.adapters.base import AcquisitionFailed
+from ingest.adapters.github import GitHubApiTransport
 from ingest.normalization import NormalizationError, normalize_bytes
 
 
@@ -359,6 +363,45 @@ class AdapterPolicyTests(unittest.TestCase):
                 (store.root / result.raw_artifact.storage_locator).read_bytes(),
                 b"hello from streamed github\n",
             )
+
+    def test_github_api_stream_verifies_canonical_blob_identity(self):
+        data = b"hello from github\n"
+        for algorithm in (hashlib.sha1, hashlib.sha256):
+            with self.subTest(algorithm=algorithm().name):
+                git_blob = f"blob {len(data)}\0".encode("ascii") + data
+                blob_sha = algorithm(git_blob).hexdigest()
+                transport = GitHubApiTransport()
+                metadata = {"type": "file", "size": len(data), "sha": blob_sha}
+
+                with patch.object(transport, "_json", return_value=metadata), patch.object(
+                    transport, "_open_raw_blob", return_value=io.BytesIO(data)
+                ):
+                    chunks, media_type, observed = transport.fetch_file_stream(
+                        "owner", "repo", "a" * 40, "README.md", 1024
+                    )
+                    self.assertEqual(b"".join(chunks), data)
+                self.assertIsNone(media_type)
+                self.assertEqual(observed["git_blob_sha"], blob_sha)
+
+    def test_github_api_stream_rejects_same_size_tampered_blob(self):
+        data = b"expected payload"
+        altered = b"rejected payload"
+        self.assertEqual(len(data), len(altered))
+        git_blob = f"blob {len(data)}\0".encode("ascii") + data
+        metadata = {
+            "type": "file",
+            "size": len(data),
+            "sha": hashlib.sha1(git_blob).hexdigest(),
+        }
+        transport = GitHubApiTransport()
+        with patch.object(transport, "_json", return_value=metadata), patch.object(
+            transport, "_open_raw_blob", return_value=io.BytesIO(altered)
+        ):
+            chunks, _, _ = transport.fetch_file_stream(
+                "owner", "repo", "a" * 40, "README.md", 1024
+            )
+            with self.assertRaisesRegex(AcquisitionFailed, "blob identity"):
+                b"".join(chunks)
 
     def test_github_ref_is_resolved_to_exact_commit_in_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -350,7 +350,7 @@ class EvidenceIntegrityTests(unittest.TestCase):
     def test_github_stream_transport_verifies_raw_blob_sha(self):
         data = b"streamed github blob"
         expected = hashlib.sha1(
-            f"blob {len(data)}\\0".encode("ascii") + data,
+            f"blob {len(data)}\0".encode("ascii") + data,
             usedforsecurity=False,
         ).hexdigest()
         payload = {

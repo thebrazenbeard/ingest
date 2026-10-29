@@ -76,7 +76,7 @@ class GitHubApiTransport:
             raise AcquisitionFailed(
                 "GitHub blob identity uses an unsupported digest length"
             )
-        digest.update(f"blob {size}\\0".encode("ascii"))
+        digest.update(f"blob {size}\0".encode("ascii"))
         return digest
 
     def _open_raw_blob(
