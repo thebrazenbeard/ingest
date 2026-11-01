@@ -100,6 +100,27 @@ python -m unittest discover -s tests -v
 
 CI exercises the suite on Python 3.12 and 3.13. Tests establish behavior of the repository's implementation; they do not prove deployment into another system. The source test suite may open a temporary loopback HTTP listener during redirect tests.
 
+### Installed-package ownership check
+
+Before relying on an Ingest installation in a shared Python environment, run the
+read-only audit from a trusted checkout using **the target environment's Python**:
+
+```bash
+/path/to/venv/bin/python tools/audit_install_ownership.py
+```
+
+This uses installed wheel `RECORD` ownership and SHA-256 file evidence without
+importing the possibly overwritten `ingest` module. It returns `PASS` only when
+the installed `vera-ingest` distribution is the sole recorded owner of the
+`ingest/` package and its recorded source bytes match; `COLLISION`,
+`INTEGRITY_FAILURE`, `UNKNOWN`, and `NOT_INSTALLED` exit nonzero. In particular,
+the `vera-mono` wheel also contains `ingest/` files: pip can overwrite them
+silently, and uninstalling either distribution can remove files needed by the
+other. **Do not co-install them.** The audit does not prevent pip mutation,
+authenticate package metadata, detect every unrecorded `sys.path` shadow, or
+qualify a live host. Repair or reinstall only in a disposable environment until
+the two source owners agree on a namespace migration.
+
 ## License
 
 **Source-visible, proprietary; not open source.** The repository grants limited noncommercial review and research rights under [`LICENSE`](LICENSE). Commercial use, redistribution, public derivative distribution, and commercial model-training use require separately documented permission; see [`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md). Third-party material retains its own licenses.
