@@ -21,6 +21,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Editor-startup source guard before dependency installation
         run: python -m unittest tests/test_editor_startup_guard.py -v
+      - name: Editor source and font provenance guard
+        run: |
+          python security/check_editor_source_safety.py
+          python -m unittest tests/test_editor_source_safety.py -v
       - name: Install package
         run: python -m pip install .
       - name: Run tests
