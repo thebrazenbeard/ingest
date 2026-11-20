@@ -103,3 +103,9 @@ CI exercises the suite on Python 3.12 and 3.13. Tests establish behavior of the 
 ## License
 
 **Source-visible, proprietary; not open source.** The repository grants limited noncommercial review and research rights under [`LICENSE`](LICENSE). Commercial use, redistribution, public derivative distribution, and commercial model-training use require separately documented permission; see [`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md). Third-party material retains its own licenses.
+
+## Editor startup containment — tracked source (2026-11-20)
+
+The tracked `main` source formerly contained a concealed VS Code `folderOpen` task invoking obfuscated `.vscode/ini` through Node. The task list is now empty, `task.allowAutomaticTasks` is explicitly `"off"`, and the obfuscated file is removed from this source tree. Historical Git source remains for investigation.
+
+**Limits:** This is source-only containment, not proof that older checkouts, editor extensions, user/global settings, local credentials, or any previous host execution are safe. Do not execute historical suspect assets.
